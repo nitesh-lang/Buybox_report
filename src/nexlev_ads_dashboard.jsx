@@ -487,19 +487,37 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (compareTabAsin) {
-      setCtM1(hashParams.m1 || "Jan");
-      setCtM2(hashParams.m2 || "Feb");
+      // Use URL hash params first, then fall back to global compareM1/M2 selection
+      setCtM1(hashParams.m1 || compareM1 || "Jan");
+      setCtM2(hashParams.m2 || compareM2 || "Feb");
       setCtAsin(compareTabAsin);
       setCtTab("Overview");
     }
-  }, [compareTabAsin]);
+  }, [compareTabAsin, compareM1, compareM2]);
 
   useEffect(() => {
     const syncDetailFromHash = () => {
-      const asinMatch = window.location.hash.match(/^#asin\/(.+)$/);
-      const compareMatch = window.location.hash.match(/^#compare\/([^?]+)/);
-      setDetailAsin(asinMatch ? decodeURIComponent(asinMatch[1]) : "");
-      setCompareTabAsin(compareMatch ? decodeURIComponent(compareMatch[1]) : "");
+      const hash = window.location.hash;
+      // Parse #asin/<ASIN>?m1=Jan&m2=Feb
+      const asinMatch = hash.match(/^#asin\/([^?]+)(?:\?m1=([^&]+)&m2=(.+))?$/);
+      // Parse #compare/<ASIN>?m1=Jan&m2=Feb
+      const compareMatch = hash.match(/^#compare\/([^?]+)(?:\?m1=([^&]+)&m2=(.+))?$/);
+
+      if (asinMatch) {
+        setDetailAsin(decodeURIComponent(asinMatch[1]));
+        if (asinMatch[2]) setCompareM1(asinMatch[2]);
+        if (asinMatch[3]) setCompareM2(asinMatch[3]);
+      } else {
+        setDetailAsin("");
+      }
+
+      if (compareMatch) {
+        setCompareTabAsin(decodeURIComponent(compareMatch[1]));
+        if (compareMatch[2]) setCompareM1(compareMatch[2]);
+        if (compareMatch[3]) setCompareM2(compareMatch[3]);
+      } else {
+        setCompareTabAsin("");
+      }
     };
 
     syncDetailFromHash();
@@ -628,8 +646,9 @@ export default function Dashboard() {
     [enriched, detailAsin]
   );
   const detailMeta = detailRows[0] ?? null;
-  const detailM1 = detailRows.find((row) => row.Month === compareM1) ?? detailRows.find((row) => row.Month === "Jan") ?? null;
-  const detailM2 = detailRows.find((row) => row.Month === compareM2) ?? detailRows.find((row) => row.Month === "Feb") ?? null;
+  // Use compareM1/compareM2 directly — no hardcoded Jan/Feb fallback
+  const detailM1 = detailRows.find((row) => row.Month === compareM1) ?? null;
+  const detailM2 = detailRows.find((row) => row.Month === compareM2) ?? null;
   const detailGrowth = useMemo(() => {
     const metrics = [
       { key: "sales", label: "Sales Growth", jan: detailM1?.TotalNetSalesValue ?? 0, feb: detailM2?.TotalNetSalesValue ?? 0 },
@@ -650,10 +669,10 @@ export default function Dashboard() {
     [enriched, compareTabAsin]
   );
   // Parse compareM1/M2 from URL hash if present
+  // hashParams reads from compareM1/compareM2 state which are kept in sync by the hash listener
   const hashParams = useMemo(() => {
-    const match = window.location.hash.match(/^#compare\/([^?]+)(?:\?m1=([^&]+)&m2=(.+))?$/);
-    return { m1: match?.[2] ?? "Jan", m2: match?.[3] ?? "Feb" };
-  }, []);
+    return { m1: compareM1 || "Jan", m2: compareM2 || "Feb" };
+  }, [compareM1, compareM2]);
   const compareTabMeta = compareTabRows[0] ?? null;
   const compareTabM1 = compareTabRows.find((row) => row.Month === hashParams.m1) ?? null;
   const compareTabM2 = compareTabRows.find((row) => row.Month === hashParams.m2) ?? null;
@@ -761,7 +780,7 @@ export default function Dashboard() {
   const ACCENT = "#3B82F6";
   const openDetailPage = (asin) => {
     if (!asin) return;
-    const detailUrl = `${window.location.pathname}${window.location.search}#asin/${encodeURIComponent(asin)}`;
+    const detailUrl = `${window.location.pathname}${window.location.search}#asin/${encodeURIComponent(asin)}?m1=${compareM1}&m2=${compareM2}`;
     window.open(detailUrl, "_blank", "noopener,noreferrer");
   };
   const openComparePage = (asin) => {
@@ -949,7 +968,7 @@ export default function Dashboard() {
               {label:"Ads Spend",key:"TotalAdsSpend",fmt:"cur"},
               {label:"ACOS",key:"ACOS",fmt:"pct"},
             ].map((metric,i)=>{
-              const allMonths = ["Jan","Feb","Mar"];
+              const allMonths = [...new Set(enriched.filter(r=>r.ASIN===activectAsin).map(r=>r.Month))].sort((a,b)=>["Jan","Feb","Mar"].indexOf(a)-["Jan","Feb","Mar"].indexOf(b));
               const rows2 = enriched.filter(r=>r.ASIN===activectAsin);
               const vals = allMonths.map(m=>rows2.find(r=>r.Month===m)?.[metric.key]??null);
               const fmtV = (v) => v===null?"—":metric.fmt==="cur"?inr(v):metric.fmt==="pct"?`${(v*100).toFixed(1)}%`:v.toLocaleString("en-IN");
@@ -1718,7 +1737,7 @@ export default function Dashboard() {
                         }}>
                           {col.key === "ASIN" && !isEmpty ? (
                             <a
-                              href={`${window.location.pathname}${window.location.search}#asin/${encodeURIComponent(row.ASIN)}`}
+                              href={`https://www.amazon.in/dp/${encodeURIComponent(row.ASIN)}`}
                               target="_blank"
                               rel="noreferrer"
                               title={`Open ${row.ASIN} in new tab`}
@@ -1728,7 +1747,7 @@ export default function Dashboard() {
                             </a>
                           ) : col.key === "Title" && !isEmpty ? (
                             <button
-                              onClick={() => openDetailPage(row.ASIN)}
+                              onClick={null}
                               title={String(row.Title)}
                               style={{ background:"none", border:"none", padding:0, color:"#0F172A", fontFamily:"inherit", fontSize:"inherit", cursor:"pointer", textAlign:"left", fontWeight:600, maxWidth:130, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", display:"block" }}
                             >

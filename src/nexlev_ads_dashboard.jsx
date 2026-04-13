@@ -211,7 +211,7 @@ const COLS = [
   { key:"fbaSku",          label:"FBA SKU",        fmt:"str",  w:90,  master:true },
   { key:"model",           label:"Model",          fmt:"str",  w:72,  master:true },
   { key:"category",        label:"Category",       fmt:"str",  w:130, master:true },
-  { key:"Title",           label:"Product",        fmt:"title",w:200 },
+  // Product column removed
   { key:"Sessions",        label:"Sessions",       fmt:"num",  w:80  },
   { key:"BuyboxPct",       label:"Buybox%",        fmt:"pct",  w:78  },
   { key:"NetUnits",        label:"Net Units",      fmt:"num",  w:72  },
@@ -221,8 +221,8 @@ const COLS = [
   { key:"Clicks",          label:"Clicks",         fmt:"num",  w:62  },
   { key:"AmsOrders",       label:"AMS Orders",     fmt:"num",  w:85  },
   { key:"OrganiSales",     label:"Organic Sales",  fmt:"num",  w:95  },
-  { key:"TotalAdsSpend",   label:"Ads Spend",      fmt:"inr",  w:90  },
-  { key:"TotalAdsSales",   label:"Ads Sales",      fmt:"inr",  w:90  },
+  { key:"TotalAdsSpend",   label:"Ad Spend",      fmt:"inr",  w:90  },
+  { key:"TotalAdsSales",   label:"Ad Sales",      fmt:"inr",  w:90  },
   { key:"ACOS",            label:"ACOS",           fmt:"pct",  w:72  },
   { key:"TACOS",           label:"TACOS",          fmt:"pct",  w:72  },
   { key:"CAC",             label:"CAC ₹",          fmt:"inr",  w:80  },
@@ -319,7 +319,7 @@ function fmtCell(row, col) {
     case "num":   return v.toLocaleString("en-IN");
     case "inr":   return "₹" + v.toLocaleString("en-IN", { maximumFractionDigits: 0 });
     case "inr2":  return "₹" + v.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    case "pct":   return v;
+    case "pct":   return (v * 100).toFixed(1) + "%";
     case "title": return typeof v === "string" && v.length > 45 ? v.slice(0, 45) + "…" : (v || "—");
     default: return v;
   }
@@ -616,22 +616,24 @@ export default function Dashboard() {
     const v = e.target.value; setSearch(v);
     setTablePage(1);
     clearTimeout(timer.current);
-    timer.current = setTimeout(() => startT(() => setDebSearch(v)), 180);
+    timer.current = setTimeout(() => startT(() => setDebSearch(v)), 250);
   }, []);
 
   const handleSort = k => { if (sortKey === k) setSortDir(d => -d); else { setSortKey(k); setSortDir(-1); } };
 
   const enriched = useMemo(() => {
-  const seen = new Set();
-  return dataRows
-    .filter(r => {
+    const seen = new Set();
+    const out = [];
+    for (let i = 0; i < dataRows.length; i++) {
+      const r = dataRows[i];
       const key = r.ASIN + "|" + r.Month;
-      if (seen.has(key)) return false;
+      if (seen.has(key)) continue;
       seen.add(key);
-      return true;
-    })
-    .map(r => ({ ...r, ...(masterData[r.ASIN] ?? {}) }));
-}, [dataRows, masterData]);
+      const m = masterData[r.ASIN];
+      out.push(m ? Object.assign(Object.create(null), r, m) : r);
+    }
+    return out;
+  }, [dataRows, masterData]);
 
   const filtered = useMemo(() => {
     const q = deferredSearch.toLowerCase();
@@ -681,8 +683,8 @@ export default function Dashboard() {
     { label: "Net Sales", jan: comparison.m1?.TotalNetSalesValue ?? 0, feb: comparison.m2?.TotalNetSalesValue ?? 0, type: "currency", colorA: "#A78BFA", colorB: "#F472B6" },
     { label: "Sessions", jan: comparison.m1?.Sessions ?? 0, feb: comparison.m2?.Sessions ?? 0, type: "number", colorA: "#38BDF8", colorB: "#60A5FA" },
     { label: "Buybox", jan: (comparison.m1?.BuyboxPct ?? 0) * 100, feb: (comparison.m2?.BuyboxPct ?? 0) * 100, type: "number", colorA: "#FBBF24", colorB: "#FB7185" },
-    { label: "Ads Sales", jan: comparison.m1?.TotalAdsSales ?? 0, feb: comparison.m2?.TotalAdsSales ?? 0, type: "currency", colorA: "#EC4899", colorB: "#FB7185" },
-    { label: "Ads Spend", jan: comparison.m1?.TotalAdsSpend ?? 0, feb: comparison.m2?.TotalAdsSpend ?? 0, type: "currency", colorA: "#FB7185", colorB: "#EF4444" },
+    { label: "Ad Sales", jan: comparison.m1?.TotalAdsSales ?? 0, feb: comparison.m2?.TotalAdsSales ?? 0, type: "currency", colorA: "#EC4899", colorB: "#FB7185" },
+    { label: "Ad Spend", jan: comparison.m1?.TotalAdsSpend ?? 0, feb: comparison.m2?.TotalAdsSpend ?? 0, type: "currency", colorA: "#FB7185", colorB: "#EF4444" },
     { label: "Clicks", jan: comparison.m1?.Clicks ?? 0, feb: comparison.m2?.Clicks ?? 0, type: "number", colorA: "#0EA5E9", colorB: "#2563EB" },
     { label: "AMS Orders", jan: comparison.m1?.AmsOrders ?? 0, feb: comparison.m2?.AmsOrders ?? 0, type: "number", colorA: "#8B5CF6", colorB: "#7C3AED" },
     { label: "ACOS", jan: (comparison.m1?.ACOS ?? 0) * 100, feb: (comparison.m2?.ACOS ?? 0) * 100, type: "number", colorA: "#F59E0B", colorB: "#F97316" },
@@ -721,7 +723,7 @@ export default function Dashboard() {
   const detailGrowth = useMemo(() => {
     const metrics = [
       { key: "sales", label: "Sales Growth", jan: detailM1?.TotalNetSalesValue ?? 0, feb: detailM2?.TotalNetSalesValue ?? 0 },
-      { key: "ads", label: "Ads Sales Growth", jan: detailM1?.TotalAdsSales ?? 0, feb: detailM2?.TotalAdsSales ?? 0 },
+      { key: "ads", label: "Ad Sales Growth", jan: detailM1?.TotalAdsSales ?? 0, feb: detailM2?.TotalAdsSales ?? 0 },
       { key: "units", label: "Units Growth", jan: detailM1?.NetUnits ?? 0, feb: detailM2?.NetUnits ?? 0 },
       { key: "buybox", label: "Buybox Growth", jan: detailM1?.BuyboxPct ?? 0, feb: detailM2?.BuyboxPct ?? 0 },
     ];
@@ -750,8 +752,8 @@ export default function Dashboard() {
     { key: "units", label: "Net Units", jan: compareTabM1?.NetUnits ?? 0, feb: compareTabM2?.NetUnits ?? 0, type: "number", colorA: "#10B981", colorB: "#059669" },
     { key: "sessions", label: "Sessions", jan: compareTabM1?.Sessions ?? 0, feb: compareTabM2?.Sessions ?? 0, type: "number", colorA: "#06B6D4", colorB: "#0284C7" },
     { key: "buybox", label: "Buybox %", jan: (compareTabM1?.BuyboxPct ?? 0) * 100, feb: (compareTabM2?.BuyboxPct ?? 0) * 100, type: "number", colorA: "#F59E0B", colorB: "#F97316" },
-    { key: "adsSales", label: "Ads Sales", jan: compareTabM1?.TotalAdsSales ?? 0, feb: compareTabM2?.TotalAdsSales ?? 0, type: "currency", colorA: "#EC4899", colorB: "#FB7185" },
-    { key: "adsSpend", label: "Ads Spend", jan: compareTabM1?.TotalAdsSpend ?? 0, feb: compareTabM2?.TotalAdsSpend ?? 0, type: "currency", colorA: "#FB7185", colorB: "#EF4444" },
+    { key: "adsSales", label: "Ad Sales", jan: compareTabM1?.TotalAdsSales ?? 0, feb: compareTabM2?.TotalAdsSales ?? 0, type: "currency", colorA: "#EC4899", colorB: "#FB7185" },
+    { key: "adsSpend", label: "Ad Spend", jan: compareTabM1?.TotalAdsSpend ?? 0, feb: compareTabM2?.TotalAdsSpend ?? 0, type: "currency", colorA: "#FB7185", colorB: "#EF4444" },
     { key: "clicks", label: "Clicks", jan: compareTabM1?.Clicks ?? 0, feb: compareTabM2?.Clicks ?? 0, type: "number", colorA: "#0EA5E9", colorB: "#2563EB" },
     { key: "orders", label: "AMS Orders", jan: compareTabM1?.AmsOrders ?? 0, feb: compareTabM2?.AmsOrders ?? 0, type: "number", colorA: "#8B5CF6", colorB: "#7C3AED" },
     { key: "impressions", label: "Impressions", jan: compareTabM1?.Impressions ?? 0, feb: compareTabM2?.Impressions ?? 0, type: "number", colorA: "#38BDF8", colorB: "#60A5FA" },
@@ -768,10 +770,11 @@ export default function Dashboard() {
   })), [compareTabM1, compareTabM2]);
 
   const sorted = useMemo(() => {
+    const col = COLS.find(c => c.key === sortKey);
+    const isMaster = col?.master;
     return [...filtered].sort((a, b) => {
-      const col = COLS.find(c => c.key === sortKey);
-      const av = col?.master ? getMasterValue(a, sortKey) : (a[sortKey] ?? null);
-      const bv = col?.master ? getMasterValue(b, sortKey) : (b[sortKey] ?? null);
+      const av = isMaster ? getMasterValue(a, sortKey) : (a[sortKey] ?? null);
+      const bv = isMaster ? getMasterValue(b, sortKey) : (b[sortKey] ?? null);
       return compareValues(av, bv, sortDir);
     });
   }, [filtered, sortKey, sortDir]);
@@ -832,14 +835,15 @@ export default function Dashboard() {
       );
     })
   ), [enriched, brand, month, cat, deferredSearch, masterData, activeSmartView]);
-  const smartViewSortedRows = useMemo(() => (
-    [...smartViewRows].sort((a, b) => {
-      const col = COLS.find((column) => column.key === sortKey);
-      const av = col?.master ? getMasterValue(a, sortKey) : (a[sortKey] ?? null);
-      const bv = col?.master ? getMasterValue(b, sortKey) : (b[sortKey] ?? null);
+  const smartViewSortedRows = useMemo(() => {
+    const col = COLS.find((column) => column.key === sortKey);
+    const isMaster = col?.master;
+    return [...smartViewRows].sort((a, b) => {
+      const av = isMaster ? getMasterValue(a, sortKey) : (a[sortKey] ?? null);
+      const bv = isMaster ? getMasterValue(b, sortKey) : (b[sortKey] ?? null);
       return compareValues(av, bv, sortDir);
-    })
-  ), [smartViewRows, sortKey, sortDir]);
+    });
+  }, [smartViewRows, sortKey, sortDir]);
   const smartViewTotals = useMemo(() => smartViewRows.reduce((acc, row) => ({
     rows: acc.rows + 1,
     sales: acc.sales + (row.TotalNetSalesValue ?? 0),
@@ -852,12 +856,12 @@ export default function Dashboard() {
 
   // Totals
   const totals = useMemo(() => filtered.reduce((acc, r) => ({
-    sessions: acc.sessions + r.Sessions,
-    units:    acc.units    + r.NetUnits,
-    sales:    acc.sales    + r.TotalNetSalesValue,
-    spend:    acc.spend    + r.TotalAdsSpend,
-    adsSales: acc.adsSales + r.TotalAdsSales,
-    orders:   acc.orders   + r.AmsOrders,
+    sessions: acc.sessions + (r.Sessions || 0),
+    units:    acc.units    + (r.NetUnits || 0),
+    sales:    acc.sales    + (r.TotalNetSalesValue || 0),
+    spend:    acc.spend    + (r.TotalAdsSpend || 0),
+    adsSales: acc.adsSales + (r.TotalAdsSales || 0),
+    orders:   acc.orders   + (r.AmsOrders || 0),
   }), { sessions:0, units:0, sales:0, spend:0, adsSales:0, orders:0 }), [filtered]);
 
   const avgAcos  = totals.adsSales > 0 ? totals.spend / totals.adsSales : 0;
@@ -1055,7 +1059,7 @@ export default function Dashboard() {
         <div style={{ padding:"18px 24px 12px", display:"grid", gridTemplateColumns:"repeat(4, minmax(0, 1fr))", gap:12 }}>
           <KpiCard label="Matching Rows" value={smartViewTotals.rows.toLocaleString("en-IN")} accent="#2563EB" />
           <KpiCard label="Net Sales" value={inr(smartViewTotals.sales)} accent="#A78BFA" />
-          <KpiCard label="Ads Spend" value={inr(smartViewTotals.spend)} accent="#FBBF24" />
+          <KpiCard label="Ad Spend" value={inr(smartViewTotals.spend)} accent="#FBBF24" />
           <KpiCard label="Avg Buybox" value={`${(smartViewAvgBuybox * 100).toFixed(1)}%`} accent="#34D399" />
         </div>
 
@@ -1099,8 +1103,7 @@ export default function Dashboard() {
                         {col.label}{sortKey===col.key&&<span style={{marginLeft:3}}>{sortDir===-1?"↓":"↑"}</span>}
                       </th>
                     ))}
-                    <th style={{ minWidth:74, padding:"10px 12px", color:THEME.headerText, fontFamily:"'DM Mono',monospace", fontSize:9.5, textTransform:"uppercase", whiteSpace:"nowrap", position:"sticky", top:0, zIndex:5, background:THEME.headerBg, borderBottom:`1px solid ${THEME.borderStrong}`, boxShadow:`inset 0 -1px 0 ${THEME.borderStrong}, ${THEME.headerShadow}` }}>Brand</th>
-                    <th style={{ minWidth:72, padding:"10px 12px", color:THEME.headerText, fontFamily:"'DM Mono',monospace", fontSize:9.5, textTransform:"uppercase", position:"sticky", top:0, zIndex:5, background:THEME.headerBg, borderBottom:`1px solid ${THEME.borderStrong}`, boxShadow:`inset 0 -1px 0 ${THEME.borderStrong}, ${THEME.headerShadow}` }}>Month</th>
+                    {/* Brand and Month columns removed */}
                     <th style={{ minWidth:190, padding:"10px 12px", color:THEME.headerText, fontFamily:"'DM Mono',monospace", fontSize:9.5, textTransform:"uppercase", position:"sticky", top:0, zIndex:5, background:THEME.headerBg, borderBottom:`1px solid ${THEME.borderStrong}`, boxShadow:`inset 0 -1px 0 ${THEME.borderStrong}, ${THEME.headerShadow}` }}>Action</th>
                   </tr>
                 </thead>
@@ -1143,8 +1146,7 @@ export default function Dashboard() {
                             </td>
                           );
                         })}
-                        <td style={{ padding:"5px 12px", fontSize:11.5, color:THEME.textSoft }}>{row.Brand || "—"}</td>
-                        <td style={{ padding:"5px 12px", fontSize:11.5, color:THEME.textSoft }}>{row.Month || "—"}</td>
+                        {/* Brand and Month cells removed */}
                         <td style={{ padding:"5px 12px" }}>
                           <div style={{ display:"flex", gap:6, alignItems:"center", flexWrap:"wrap" }}>
                             <a
@@ -1174,7 +1176,7 @@ export default function Dashboard() {
                   })}
                   {smartViewSortedRows.length === 0 && (
                     <tr>
-                      <td colSpan={COLS.length + 3} style={{ padding:"28px 18px", textAlign:"center", color:THEME.textMuted, background:THEME.surface }}>
+                      <td colSpan={COLS.length + 1} style={{ padding:"28px 18px", textAlign:"center", color:THEME.textMuted, background:THEME.surface }}>
                         No rows match this smart view with the current filters.
                       </td>
                     </tr>
@@ -1333,8 +1335,8 @@ export default function Dashboard() {
             <MetricCard label="Sessions" v1={ctR1?.Sessions} v2={ctR2?.Sessions}/>
             <MetricCard label="Buybox %" v1={ctR1?.BuyboxPct} v2={ctR2?.BuyboxPct} fmt="pct"/>
             <MetricCard label="AMS Orders" v1={ctR1?.AmsOrders} v2={ctR2?.AmsOrders}/>
-            <MetricCard label="Ads Sales" v1={ctR1?.TotalAdsSales} v2={ctR2?.TotalAdsSales} fmt="cur"/>
-            <MetricCard label="Ads Spend" v1={ctR1?.TotalAdsSpend} v2={ctR2?.TotalAdsSpend} fmt="cur"/>
+            <MetricCard label="Ad Sales" v1={ctR1?.TotalAdsSales} v2={ctR2?.TotalAdsSales} fmt="cur"/>
+            <MetricCard label="Ad Spend" v1={ctR1?.TotalAdsSpend} v2={ctR2?.TotalAdsSpend} fmt="cur"/>
             <MetricCard label="ACOS" v1={ctR1?.ACOS} v2={ctR2?.ACOS} fmt="pct"/>
             <MetricCard label="TACOS" v1={ctR1?.TACOS} v2={ctR2?.TACOS} fmt="pct"/>
             <MetricCard label="Impressions" v1={ctR1?.Impressions} v2={ctR2?.Impressions}/>
@@ -1354,7 +1356,7 @@ export default function Dashboard() {
               {label:"Net Sales",key:"TotalNetSalesValue",fmt:"cur"},
               {label:"Net Units",key:"NetUnits",fmt:"num"},
               {label:"Sessions",key:"Sessions",fmt:"num"},
-              {label:"Ads Spend",key:"TotalAdsSpend",fmt:"cur"},
+              {label:"Ad Spend",key:"TotalAdsSpend",fmt:"cur"},
               {label:"ACOS",key:"ACOS",fmt:"pct"},
             ].map((metric,i)=>{
               const allMonths = [...new Set(enriched.filter(r=>r.ASIN===activectAsin).map(r=>r.Month))].sort((a,b)=>["Jan","Feb","Mar"].indexOf(a)-["Jan","Feb","Mar"].indexOf(b));
@@ -1378,15 +1380,15 @@ export default function Dashboard() {
           <MetricCard label="Net Sales" v1={ctR1?.TotalNetSalesValue} v2={ctR2?.TotalNetSalesValue} fmt="cur"/>
           <MetricCard label="Net Units" v1={ctR1?.NetUnits} v2={ctR2?.NetUnits}/>
           <MetricCard label="AMS Orders" v1={ctR1?.AmsOrders} v2={ctR2?.AmsOrders}/>
-          <MetricCard label="Ads Sales" v1={ctR1?.TotalAdsSales} v2={ctR2?.TotalAdsSales} fmt="cur"/>
+          <MetricCard label="Ad Sales" v1={ctR1?.TotalAdsSales} v2={ctR2?.TotalAdsSales} fmt="cur"/>
           <MetricCard label="Organic Units" v1={ctR1?.OrganiSales} v2={ctR2?.OrganiSales}/>
           <MetricCard label="Organic %" v1={ctR1?.OrganicPct} v2={ctR2?.OrganicPct} fmt="pct"/>
         </div>
       );
       if (ctTab === "Ads") return (
         <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12}}>
-          <MetricCard label="Ads Spend" v1={ctR1?.TotalAdsSpend} v2={ctR2?.TotalAdsSpend} fmt="cur"/>
-          <MetricCard label="Ads Sales" v1={ctR1?.TotalAdsSales} v2={ctR2?.TotalAdsSales} fmt="cur"/>
+          <MetricCard label="Ad Spend" v1={ctR1?.TotalAdsSpend} v2={ctR2?.TotalAdsSpend} fmt="cur"/>
+          <MetricCard label="Ad Sales" v1={ctR1?.TotalAdsSales} v2={ctR2?.TotalAdsSales} fmt="cur"/>
           <MetricCard label="ACOS" v1={ctR1?.ACOS} v2={ctR2?.ACOS} fmt="pct"/>
           <MetricCard label="TACOS" v1={ctR1?.TACOS} v2={ctR2?.TACOS} fmt="pct"/>
           <MetricCard label="Impressions" v1={ctR1?.Impressions} v2={ctR2?.Impressions}/>
@@ -1426,8 +1428,8 @@ export default function Dashboard() {
                     ["Net Sales", inr(row.TotalNetSalesValue||0)],
                     ["Net Units", (row.NetUnits||0).toLocaleString("en-IN")],
                     ["Sessions", (row.Sessions||0).toLocaleString("en-IN")],
-                    ["Ads Spend", inr(row.TotalAdsSpend||0)],
-                    ["Ads Sales", inr(row.TotalAdsSales||0)],
+                    ["Ad Spend", inr(row.TotalAdsSpend||0)],
+                    ["Ad Sales", inr(row.TotalAdsSales||0)],
                     ["ACOS", `${((row.ACOS||0)*100).toFixed(1)}%`],
                     ["TACOS", `${((row.TACOS||0)*100).toFixed(1)}%`],
                     ["Buybox", `${((row.BuyboxPct||0)*100).toFixed(1)}%`],
@@ -1584,8 +1586,8 @@ export default function Dashboard() {
           { label:"Net Units", key:"NetUnits", fmt:"num" },
           { label:"Sessions", key:"Sessions", fmt:"num" },
           { label:"Buybox %", key:"BuyboxPct", fmt:"pct" },
-          { label:"Ads Sales", key:"TotalAdsSales", fmt:"cur" },
-          { label:"Ads Spend", key:"TotalAdsSpend", fmt:"cur" },
+          { label:"Ad Sales", key:"TotalAdsSales", fmt:"cur" },
+          { label:"Ad Spend", key:"TotalAdsSpend", fmt:"cur" },
           { label:"ACOS", key:"ACOS", fmt:"pct" },
           { label:"TACOS", key:"TACOS", fmt:"pct" },
           { label:"Clicks", key:"Clicks", fmt:"num" },
@@ -1947,7 +1949,7 @@ export default function Dashboard() {
     "Which ASIN has the best ACOS?",
     "Top 5 ASINs by Net Sales",
     "Which brand spent most on ads?",
-    "Compare Nexlev vs Audio Array",
+    "Compare all 4 brands: Nexlev, Audio Array, Tonor, White Mulberry",
     "Which ASINs have Buybox below 50%?",
     "Show me high TACOS ASINs to fix",
   ];
@@ -1966,10 +1968,10 @@ export default function Dashboard() {
       const top10 = [...filtered].sort((a,b)=>(b.TotalNetSalesValue||0)-(a.TotalNetSalesValue||0)).slice(0,10).map(r=>
         `${r.ASIN}(${r.Brand},${r.Month}): Sales=₹${((r.TotalNetSalesValue||0)/1000).toFixed(0)}K, Units=${r.NetUnits||0}, ACOS=${((r.ACOS||0)*100).toFixed(1)}%, Buybox=${((r.BuyboxPct||0)*100).toFixed(1)}%, Sessions=${r.Sessions||0}`
       ).join("\n");
-      return `You are an expert Amazon performance analyst AI for NexArray BI Hub dashboard.\n\nBRAND TOTALS:\n${brandTotals}\n\nTOP 10 ASINs (filter: Brand=${brand||"All"}, Month=${month}):\n${top10}\n\nOVERALL: Sessions=${totals.sessions.toLocaleString()}, Units=${totals.units.toLocaleString()}, Sales=₹${(totals.sales/10000000).toFixed(2)}Cr, Spend=₹${(totals.spend/100000).toFixed(1)}L, AvgACOS=${(avgAcos*100).toFixed(1)}%, AvgTACOS=${(avgTacos*100).toFixed(1)}%\n\nBe concise and business-focused. Use bullet points and bold key numbers with ₹ signs.`;
+      return `You are an expert Amazon performance analyst AI for BrandIQ Hub dashboard.\n\nBRAND TOTALS:\n${brandTotals}\n\nTOP 10 ASINs (filter: Brand=${brand||"All"}, Month=${month}):\n${top10}\n\nOVERALL: Sessions=${totals.sessions.toLocaleString()}, Units=${totals.units.toLocaleString()}, Sales=₹${(totals.sales/10000000).toFixed(2)}Cr, Spend=₹${(totals.spend/100000).toFixed(1)}L, AvgACOS=${(avgAcos*100).toFixed(1)}%, AvgTACOS=${(avgTacos*100).toFixed(1)}%\n\nBe concise and business-focused. Use bullet points and bold key numbers with ₹ signs.`;
     } catch(err) {
       console.error("buildAiContext error:", err);
-      return "You are an expert Amazon performance analyst AI for NexArray BI Hub dashboard. Data could not be loaded.";
+      return "You are an expert Amazon performance analyst AI for BrandIQ Hub dashboard. Data could not be loaded.";
     }
   };
 
@@ -2077,7 +2079,7 @@ export default function Dashboard() {
             <span style={{ color: "#fff", fontSize: 13, fontWeight: 800 }}>N</span>
           </div>
           <div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: THEME.text, letterSpacing: -0.4 }}>NexArray BI Hub</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: THEME.text, letterSpacing: -0.4 }}>BrandIQ Hub</div>
             <div style={{ fontSize: 9, color: THEME.textFaint, fontFamily: "'DM Mono',monospace", letterSpacing: 1 }}>AMAZON PERFORMANCE INTELLIGENCE</div>
           </div>
         </div>
@@ -2163,8 +2165,8 @@ export default function Dashboard() {
         <KpiCard label="Sessions"   value={totals.sessions.toLocaleString("en-IN")}    accent="#38BDF8" trend={trendPct(totals.sessions, prevTotals.sessions)} />
         <KpiCard label="Net Units"  value={totals.units.toLocaleString("en-IN")}        accent="#34D399" trend={trendPct(totals.units, prevTotals.units)} />
         <KpiCard label="Net Sales"  value={inr(totals.sales)}   accent="#A78BFA" trend={trendPct(totals.sales, prevTotals.sales)} />
-        <KpiCard label="Ads Spend"  value={inr(totals.spend)}   accent="#FBBF24" trend={trendPct(totals.spend, prevTotals.spend)} />
-        <KpiCard label="Ads Sales"  value={inr(totals.adsSales)} accent="#F9A8D4" trend={trendPct(totals.adsSales, prevTotals.adsSales)} />
+        <KpiCard label="Ad Spend"  value={inr(totals.spend)}   accent="#FBBF24" trend={trendPct(totals.spend, prevTotals.spend)} />
+        <KpiCard label="Ad Sales"  value={inr(totals.adsSales)} accent="#F9A8D4" trend={trendPct(totals.adsSales, prevTotals.adsSales)} />
         <KpiCard label="AMS Orders" value={totals.orders.toLocaleString("en-IN")}       accent="#FB923C" trend={trendPct(totals.orders, prevTotals.orders)} />
         <KpiCard label="Avg ACoS"   value={(avgAcos*100).toFixed(1)+"%"}  accent={avgAcos<0.2?"#34D399":avgAcos<0.35?"#FBBF24":"#F87171"} />
         <KpiCard label="Avg TACoS"  value={(avgTacos*100).toFixed(1)+"%"} accent={avgTacos<0.1?"#34D399":avgTacos<0.2?"#FBBF24":"#F87171"} />
@@ -2195,8 +2197,6 @@ export default function Dashboard() {
                     {col.label}{sortKey===col.key&&<span style={{marginLeft:3}}>{sortDir===-1?"↓":"↑"}</span>}
                   </th>
                 ))}
-                <th style={{ minWidth:74, padding:"10px 12px", color:THEME.headerText, fontFamily:"'DM Mono',monospace", fontSize:9.5, textTransform:"uppercase", whiteSpace:"nowrap", position:"sticky", top:0, zIndex:5, background:THEME.headerBg, borderBottom:`1px solid ${THEME.borderStrong}`, boxShadow:`inset 0 -1px 0 ${THEME.borderStrong}, ${THEME.headerShadow}` }}>Brand</th>
-                <th style={{ minWidth:72, padding:"10px 12px", color:THEME.headerText, fontFamily:"'DM Mono',monospace", fontSize:9.5, textTransform:"uppercase", position:"sticky", top:0, zIndex:5, background:THEME.headerBg, borderBottom:`1px solid ${THEME.borderStrong}`, boxShadow:`inset 0 -1px 0 ${THEME.borderStrong}, ${THEME.headerShadow}` }}>Month</th>
               </tr>
             </thead>
             <tbody>
@@ -2268,34 +2268,18 @@ export default function Dashboard() {
                                 border: `1px solid ${accentColor}33`,
                                 borderRadius:4, padding:"1px 6px",
                                 color: accentColor, fontSize:11,
-                              }}>{(v*100).toFixed(1)}%</span>
+                              }}>{disp}</span>
                             : (isEmpty ? <span style={{color:"#2D3139"}}>—</span> : disp)
                           }
                         </td>
                       );
                     })}
-                    <td style={{ minWidth:74, padding:"7px 12px", whiteSpace:"nowrap" }}>
-                      <span style={{
-                        display:"inline-flex", alignItems:"center", justifyContent:"center", minWidth:42, borderRadius:6, padding:"3px 9px", fontSize:10.5, fontWeight:700,
-                        background: row.Brand==="Nexlev"?"#ECFDF3":"#EFF6FF",
-                        border: `1px solid ${row.Brand==="Nexlev"?"#86EFAC":"#BFDBFE"}`,
-                        color: row.Brand==="Nexlev"?"#15803D":"#1D4ED8",
-                        fontFamily:"'DM Mono',monospace",
-                      }}>{row.Brand==="Nexlev"?"NXL":"AA"}</span>
-                    </td>
-                    <td style={{ minWidth:72, padding:"7px 12px" }}>
-                      <span style={{
-                        display:"inline-flex", alignItems:"center", justifyContent:"center", minWidth:40, borderRadius:6, padding:"3px 9px", fontSize:10.5,
-                        background:THEME.panelBg, border:`1px solid ${THEME.border}`, color:THEME.textMuted,
-                        fontFamily:"'DM Mono',monospace",
-                      }}>{row.Month}</span>
-                    </td>
                   </tr>
                 );
               })}
               {visibleRows.length===0&&(
                 <tr>
-                  <td colSpan={COLS.length+2} style={{ padding:"42px 24px" }}>
+                  <td colSpan={COLS.length} style={{ padding:"42px 24px" }}>
                     <div style={{ maxWidth:420, margin:"0 auto", textAlign:"center", padding:"22px 24px", borderRadius:18, background:`linear-gradient(180deg, ${THEME.surface}, ${THEME.panelBg})`, border:"1px solid #BFDBFE" }}>
                       <div style={{ fontSize:12, color:"#2563EB", fontFamily:"'DM Mono',monospace", letterSpacing:1, textTransform:"uppercase", marginBottom:10 }}>No matching rows</div>
                       <div style={{ fontSize:20, fontWeight:700, color:THEME.text, marginBottom:8 }}>No results for this combination</div>

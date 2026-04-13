@@ -1,507 +1,280 @@
-"""
-BuyBox Ads Report — Monthly Data Generator
-===========================================
-
-FOLDER STRUCTURE:
------------------
-C:\\Projects\\buybox\\data\\
-├── combined_product_master.csv   ← Shared master for both brands: FBA SKU / Model / Category / DP / NLC
-├── Audio array\\
-│   ├── Jan\\
-│   │   ├── business_report.csv   ← Business Report from Amazon
-│   │   ├── sales_asin.csv        ← Sales by ASIN from Amazon
-│   │   ├── sp_ads.xlsx           ← Sponsored Products report
-│   │   └── sd_ads.xlsx           ← Sponsored Display report
-│   ├── Feb\\  (same 4 files)
-│   └── Mar\\  (same 4 files)
-└── Nexlev\\
-    ├── Jan\\  (same 4 files)
-    ├── Feb\\  (same 4 files)
-    └── Mar\\  (same 4 files)
-
-HOW TO USE EVERY MONTH:
-------------------------
-1. Download 4 files from Amazon for each brand
-2. Rename them exactly as shown above
-3. Put them in the correct brand/month folder
-4. Maintain data\\combined_product_master.csv for both Nexlev and Audio Array DP/NLC
-5. Open terminal in C:\\Projects\\buybox\\data\\
-6. Run the generator
-7. Refresh browser → dashboard updated!
-"""
-
+import os, json
 import pandas as pd
-import numpy as np
-import json, re, os, sys, glob
 
-# ── CONFIG ────────────────────────────────────────────────────────────────────
-DATA_ROOT = os.path.dirname(os.path.abspath(__file__))
-JSX_PATH  = os.path.join(DATA_ROOT, '..', 'src', 'nexlev_ads_dashboard.jsx')
+BASE       = "./data"
+SKU_MASTER = "./data/sku_master.xlsx"
 
-BRANDS = {
-    'Nexlev':      'Nexlev',
-    'Audio array': 'Audio Array',
+CONFIGS = {
+    "Nexlev": {
+        "months": {
+            "Jan": {"biz": "Nexlev/Jan/business_report.csv",  "ads": "Nexlev/Jan/Sp&Sd.xlsx", "p1": "Nexlev/Jan/1Psales.csv"},
+            "Feb": {"biz": "Nexlev/Feb/business_report.csv",  "ads": "Nexlev/Feb/Sp&Sd.xlsx", "p1": "Nexlev/Feb/1Psales.csv"},
+            "Mar": {"biz": "Nexlev/Mar/business_report.csv",  "ads": "Nexlev/Mar/Sp&Sd.xlsx", "p1": "Nexlev/Mar/1Psales.csv"},
+        }
+    },
+    "Audio Array": {
+        "months": {
+            "Jan": {"biz": "Audio array/Jan/business_report.csv",  "ads": "Audio array/Jan/Sp&Sd.xlsx", "p1": "Audio array/Jan/1Psales.csv"},
+            "Feb": {"biz": "Audio array/Feb/business_report.csv",  "ads": "Audio array/Feb/Sp&Sd.xlsx", "p1": "Audio array/Feb/1Psales.csv"},
+            "Mar": {"biz": "Audio array/Mar/business_report.csv",  "ads": "Audio array/Mar/Sp&Sd.xlsx", "p1": "Audio array/Mar/1Psales.csv"},
+        }
+    },
+    "Tonor": {
+        "months": {
+            "Feb": {"biz": "Tonor/Feb/business_report.xlsx", "ads": "Tonor/Feb/Sp&Sd.xlsx", "p1": "Tonor/Feb/1PSales.csv"},
+            "Mar": {"biz": "Tonor/Mar/business_report.xlsx", "ads": "Tonor/Mar/Sp&Sd.xlsx", "p1": "Tonor/Mar/1Psales.csv"},
+        }
+    },
+    "White Mulberry": {
+        "months": {
+            "Feb": {"biz": "White Mulberry/Feb/business_report.xlsx", "ads": "White Mulberry/Feb/Sp&Sd.xlsx", "p1": "White Mulberry/Feb/1Psales.csv"},
+            "Mar": {"biz": "White Mulberry/Mar/business_report.xlsx", "ads": "White Mulberry/Mar/Sp&Sd.xlsx", "p1": "White Mulberry/Mar/1Psales.csv"},
+        }
+    },
 }
 
-COMBINED_MASTER_PATH = os.path.join(DATA_ROOT, 'combined_product_master.csv')
-NEXLEV_MASTER_GLOB = os.path.join(DATA_ROOT, 'Nexlev BuyBox Master*.xlsx')
-AUDIO_MASTER_GLOB = os.path.join(DATA_ROOT, 'Audio Array Buybox Analysis*.xlsx')
+def safe_float(v):
+    try: return float(str(v).replace(",","").replace("%","").replace("$","").replace("₹","").replace("(","").replace(")","").strip())
+    except: return 0.0
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-def clean_money(val):
-    if pd.isna(val): return 0.0
-    return float(re.sub(r'[₹,\s]', '', str(val)) or 0)
+def read_csv_safe(path):
+    for enc in ["utf-8","latin-1","cp1252"]:
+        try:
+            df = pd.read_csv(path, encoding=enc, dtype=str)
+            df.columns = [c.strip() for c in df.columns]
+            return df
+        except: pass
+    return pd.DataFrame()
 
-def clean_num(val):
-    if pd.isna(val): return 0.0
-    return float(re.sub(r'[,\s]', '', str(val)) or 0)
+def read_xlsx_safe(path):
+    try:
+        df = pd.read_excel(path, dtype=str)
+        df.columns = [c.strip() for c in df.columns]
+        return df
+    except: return pd.DataFrame()
 
-def clean_pct(val):
-    if pd.isna(val): return 0.0
-    return float(str(val).replace('%', '').strip() or 0) / 100
+def read_file(path):
+    if not os.path.exists(path): return pd.DataFrame()
+    if path.endswith('.xlsx') or path.endswith('.xls'):
+        return read_xlsx_safe(path)
+    return read_csv_safe(path)
 
-def clean_optional_text(val, default=''):
-    if pd.isna(val):
-        return default
-    text = str(val).strip()
-    return text if text else default
+def read_p1(path):
+    if not os.path.exists(path): return pd.DataFrame()
+    for enc in ["utf-8","latin-1","cp1252"]:
+        try:
+            df = pd.read_csv(path, header=1, encoding=enc, dtype=str)
+            df.columns = [c.strip() for c in df.columns]
+            return df
+        except: pass
+    return pd.DataFrame()
 
-def clean_optional_money(val):
-    if pd.isna(val) or str(val).strip() == '':
-        return np.nan
-    return clean_money(val)
+def col(df, *names):
+    for n in names:
+        for c in df.columns:
+            if n.lower() in c.lower(): return c
+    return None
 
-def first_existing_file(pattern):
-    matches = sorted(glob.glob(pattern))
-    return matches[0] if matches else None
+# ── SKU Master ────────────────────────────────────────────────────────────────
+sku_df = read_xlsx_safe(SKU_MASTER)
+sku_lookup = {}
+asin_c  = col(sku_df,"child asin","asin")
+fba_c   = col(sku_df,"fba sku","fba_sku")
+model_c = col(sku_df,"model")
+# category_l0 = mainCat (Home & Kitchen / HPC etc)
+# category_l1 = specific category (Fabric Care, Trimmers etc)
+cat_l0_c = next((c for c in sku_df.columns if c.strip().lower()=="category_l0"), None)
+cat_l1_c = next((c for c in sku_df.columns if c.strip().lower()=="category_l1"), None)
+nlc_c   = col(sku_df,"nlc","net landed")
+brand_c = col(sku_df,"brand")
 
-# ── Readers ───────────────────────────────────────────────────────────────────
-def read_business(path):
-    df = pd.read_csv(path)
-    rename_map = {
-        '(Child) ASIN':              'ASIN',
-        'Title':                     'Title',
-        'Sessions - Total':          'Sessions',
-        'Featured Offer Percentage': 'BuyboxPct',
-        'Units Ordered':             'NetUnits',
-        'Ordered Product Sales':     'TotalNetSalesValue',
+for _, row in sku_df.iterrows():
+    asin = str(row.get(asin_c,"")).strip().upper() if asin_c else ""
+    if not asin or asin=="NAN": continue
+    nlc = safe_float(row.get(nlc_c,0)) if nlc_c else 0
+    main_cat = str(row.get(cat_l0_c,"")).strip() if cat_l0_c else ""
+    category = str(row.get(cat_l1_c,"")).strip() if cat_l1_c else main_cat
+    sku_lookup[asin] = {
+        "fba_sku":  str(row.get(fba_c,"")).strip() if fba_c else "",
+        "model":    str(row.get(model_c,"")).strip() if model_c else "",
+        "category": category,
+        "mainCat":  main_cat,
+        "dp":       round(nlc/1.18, 2) if nlc else 0,
     }
-    for col in df.columns:
-        cl = str(col).lower().strip()
-        if cl in ('fba sku', 'fbasku', 'fba_sku', 'sku', 'seller sku', 'seller_sku', 'merchant sku', 'merchant_sku'):
-            rename_map[col] = 'fbaSku'
-    df = df.rename(columns=rename_map)
-    df['Sessions']           = df['Sessions'].apply(clean_num)
-    df['BuyboxPct']          = df['BuyboxPct'].apply(clean_pct)
-    df['NetUnits']           = df['NetUnits'].apply(clean_num)
-    df['TotalNetSalesValue'] = df['TotalNetSalesValue'].apply(clean_money)
-    df['Title']              = df['Title'].fillna('').astype(str)
-    if 'fbaSku' not in df.columns:
-        df['fbaSku'] = ''
-    df['fbaSku'] = df['fbaSku'].apply(clean_optional_text)
-    return df[['ASIN', 'Title', 'Sessions', 'BuyboxPct', 'NetUnits', 'TotalNetSalesValue', 'fbaSku']].copy()
-
-def read_sp(path):
-    df = pd.read_excel(path, engine='openpyxl')
-    df = df.rename(columns={
-        'Advertised ASIN':         'ASIN',
-        'Spend':                   'Spend',
-        '14 Day Total Sales (₹)':  'AdsSales',
-        '14 Day Total Orders (#)': 'Orders',
-    })
-    for col in ['Spend', 'AdsSales', 'Orders', 'Impressions', 'Clicks']:
-        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-    return df.groupby('ASIN', as_index=False).agg(
-        SP_Impressions=('Impressions', 'sum'),
-        SP_Clicks     =('Clicks',      'sum'),
-        SP_Spend      =('Spend',       'sum'),
-        SP_Sales      =('AdsSales',    'sum'),
-        SP_Orders     =('Orders',      'sum'),
-    )
-
-def read_sd(path):
-    df = pd.read_excel(path, engine='openpyxl')
-    df = df.rename(columns={
-        'Advertised ASIN':         'ASIN',
-        'Spend':                   'Spend',
-        '14 Day Total Sales (₹)':  'AdsSales',
-        '14 Day Total Orders (#)': 'Orders',
-    })
-    for col in ['Spend', 'AdsSales', 'Orders', 'Impressions', 'Clicks']:
-        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-    return df.groupby('ASIN', as_index=False).agg(
-        SD_Impressions=('Impressions', 'sum'),
-        SD_Clicks     =('Clicks',      'sum'),
-        SD_Spend      =('Spend',       'sum'),
-        SD_Sales      =('AdsSales',    'sum'),
-        SD_Orders     =('Orders',      'sum'),
-    )
-
-def read_sales_asin(path):
-    # Row 0 = metadata, Row 1 = real headers, Row 2+ = data
-    df = pd.read_csv(path, skiprows=1, dtype=str)
-    # Strip whitespace from column names
-    df.columns = df.columns.str.strip()
-    print(f"     📋 sales_asin columns: {list(df.columns[:6])}")
-
-    # Find ASIN, Ordered Revenue, Ordered Units columns (case-insensitive)
-    col_map = {}
-    for col in df.columns:
-        cl = col.lower().strip()
-        if cl == 'asin':
-            col_map['ASIN'] = col
-        elif cl in ('fba sku', 'fbasku', 'fba_sku', 'sku', 'seller sku', 'seller_sku', 'merchant sku', 'merchant_sku'):
-            col_map['fbaSku'] = col
-        elif 'ordered revenue' in cl:
-            col_map['OrderedRevenue'] = col
-        elif 'ordered units' in cl:
-            col_map['OrderedUnits'] = col
-
-    if 'ASIN' not in col_map:
-        print(f"     ⚠️  Could not find ASIN column in sales_asin.csv")
-        return None
-
-    df = df.rename(columns=col_map)
-    df = df[df['ASIN'].notna() & (df['ASIN'].str.strip() != '')]
-
-    if 'OrderedRevenue' in df.columns:
-        df['OrderedRevenue'] = df['OrderedRevenue'].apply(clean_money)
-    else:
-        df['OrderedRevenue'] = 0.0
-
-    if 'OrderedUnits' in df.columns:
-        df['OrderedUnits'] = df['OrderedUnits'].apply(clean_num)
-    else:
-        df['OrderedUnits'] = 0.0
-
-    if 'fbaSku' in df.columns:
-        df['fbaSku'] = df['fbaSku'].apply(clean_optional_text)
-    else:
-        df['fbaSku'] = ''
-
-    return df[['ASIN', 'OrderedRevenue', 'OrderedUnits', 'fbaSku']].groupby('ASIN', as_index=False).agg(
-        OrderedRevenue=('OrderedRevenue', 'sum'),
-        OrderedUnits  =('OrderedUnits',   'sum'),
-        fbaSku        =('fbaSku',         'last'),
-    )
-
-def read_combined_master(path):
-    if not os.path.exists(path):
-        print(f"  ℹ️  Combined master not found: {path}")
-        return pd.DataFrame(columns=['Brand', 'ASIN', 'fbaSku', 'model', 'category', 'mainCat', 'dp', 'nlc'])
-
-    df = pd.read_csv(path, dtype=str)
-    df.columns = [str(col).strip() for col in df.columns]
-
-    rename_map = {}
-    for col in df.columns:
-        cl = col.lower().strip()
-        if cl == 'brand':
-            rename_map[col] = 'Brand'
-        elif cl == 'asin':
-            rename_map[col] = 'ASIN'
-        elif cl in ('fba sku', 'fbasku', 'fba_sku'):
-            rename_map[col] = 'fbaSku'
-        elif cl == 'model':
-            rename_map[col] = 'model'
-        elif cl == 'category':
-            rename_map[col] = 'category'
-        elif cl in ('main category', 'maincat', 'main_cat'):
-            rename_map[col] = 'mainCat'
-        elif cl == 'dp':
-            rename_map[col] = 'dp'
-        elif cl == 'nlc':
-            rename_map[col] = 'nlc'
-
-    df = df.rename(columns=rename_map)
-
-    if 'Brand' not in df.columns or 'ASIN' not in df.columns:
-        print(f"  ⚠️  Combined master skipped — Brand/ASIN column missing in {path}")
-        return pd.DataFrame(columns=['Brand', 'ASIN', 'fbaSku', 'model', 'category', 'mainCat', 'dp', 'nlc'])
-
-    for col in ['fbaSku', 'model', 'category', 'mainCat']:
-        if col not in df.columns:
-            df[col] = ''
-        df[col] = df[col].apply(clean_optional_text)
-
-    for col in ['dp', 'nlc']:
-        if col not in df.columns:
-            df[col] = np.nan
-        df[col] = df[col].apply(clean_optional_money)
-
-    df['Brand'] = df['Brand'].apply(clean_optional_text)
-    df['ASIN'] = df['ASIN'].apply(clean_optional_text)
-    df = df[(df['Brand'] != '') & (df['ASIN'] != '')]
-
-    print(f"  ✅ Loaded combined master: {len(df)} rows")
-    return df[['Brand', 'ASIN', 'fbaSku', 'model', 'category', 'mainCat', 'dp', 'nlc']].drop_duplicates(subset=['Brand', 'ASIN'], keep='last')
-
-def read_excel_master(path, brand_label):
-    df = pd.read_excel(path, sheet_name='AMS Review', skiprows=2, dtype=str, engine='openpyxl')
-    df.columns = [str(col).strip() for col in df.columns]
-    df = df.dropna(how='all')
-
-    if brand_label == 'Nexlev':
-        rename_map = {
-            'FBA SKU': 'fbaSku',
-            'Model': 'model',
-            'ASIN': 'ASIN',
-            'Category': 'mainCat',
-            'Main Category': 'category',
-            'DP': 'dp',
-            'NLC': 'nlc',
-        }
-    else:
-        rename_map = {
-            'Asin': 'ASIN',
-            'SKU': 'fbaSku',
-            'Product Code': 'model',
-            'Category': 'mainCat',
-            'Sub-Category': 'category',
-            'NLC': 'nlc',
-        }
-
-    df = df.rename(columns=rename_map)
-
-    if 'ASIN' not in df.columns:
-        print(f"  ⚠️  Master skipped — ASIN column missing in {path}")
-        return pd.DataFrame(columns=['Brand', 'ASIN', 'fbaSku', 'model', 'category', 'mainCat', 'dp', 'nlc'])
-
-    for col in ['fbaSku', 'model', 'category', 'mainCat']:
-        if col not in df.columns:
-            df[col] = ''
-        df[col] = df[col].apply(clean_optional_text)
-
-    if 'dp' not in df.columns:
-        df['dp'] = np.nan
-    if 'nlc' not in df.columns:
-        df['nlc'] = np.nan
-
-    df['dp'] = df['dp'].apply(clean_optional_money)
-    df['nlc'] = df['nlc'].apply(clean_optional_money)
-    df['ASIN'] = df['ASIN'].apply(clean_optional_text)
-    df = df[df['ASIN'] != '']
-    df['Brand'] = brand_label
-
-    print(f"  ✅ Loaded {brand_label} workbook master: {len(df)} rows")
-    return df[['Brand', 'ASIN', 'fbaSku', 'model', 'category', 'mainCat', 'dp', 'nlc']].drop_duplicates(subset=['Brand', 'ASIN'], keep='first')
-
-def load_master_data():
-    masters = []
-
-    nexlev_master_path = first_existing_file(NEXLEV_MASTER_GLOB)
-    if nexlev_master_path:
-        masters.append(read_excel_master(nexlev_master_path, 'Nexlev'))
-
-    audio_master_path = first_existing_file(AUDIO_MASTER_GLOB)
-    if audio_master_path:
-        masters.append(read_excel_master(audio_master_path, 'Audio Array'))
-
-    if os.path.exists(COMBINED_MASTER_PATH):
-        masters.append(read_combined_master(COMBINED_MASTER_PATH))
-
-    masters = [df for df in masters if df is not None and not df.empty]
-    if not masters:
-        return pd.DataFrame(columns=['Brand', 'ASIN', 'fbaSku', 'model', 'category', 'mainCat', 'dp', 'nlc'])
-
-    combined = pd.concat(masters, ignore_index=True)
-    combined = combined.drop_duplicates(subset=['Brand', 'ASIN'], keep='first')
-    print(f"  ✅ Total master rows available: {len(combined)}")
-    return combined
-
-# ── Process one brand + month ─────────────────────────────────────────────────
-def process_month(folder, brand_label, month_label):
-    biz_path   = os.path.join(folder, 'business_report.csv')
-    sp_path    = os.path.join(folder, 'sp_ads.xlsx')
-    sd_path    = os.path.join(folder, 'sd_ads.xlsx')
-    sales_path = os.path.join(folder, 'sales_asin.csv')
-
-    missing = [name for p, name in [
-        (biz_path, 'business_report.csv'),
-        (sp_path,  'sp_ads.xlsx'),
-        (sd_path,  'sd_ads.xlsx'),
-    ] if not os.path.exists(p)]
-
-    if missing:
-        print(f"  ⚠️  Skipping {brand_label} {month_label} — missing: {', '.join(missing)}")
-        return None
-
-    print(f"  ✅ Reading {brand_label} — {month_label}")
-
-    biz = read_business(biz_path)
-    sp  = read_sp(sp_path)
-    sd  = read_sd(sd_path)
-
-    df = biz.merge(sp, on='ASIN', how='outer').merge(sd, on='ASIN', how='outer').fillna(0)
-    df['Title'] = df['Title'].replace(0, '')
-
-    # Merge sales_asin if available (optional file)
-    if os.path.exists(sales_path):
-        sales = read_sales_asin(sales_path)
-        df = df.merge(sales, on='ASIN', how='left')
-        df['OrderedRevenue'] = df['OrderedRevenue'].fillna(0).round(2)
-        df['OrderedUnits']   = df['OrderedUnits'].fillna(0)
-        df['fbaSku'] = df['fbaSku'].fillna('')
-    else:
-        print(f"     ℹ️  sales_asin.csv not found for {brand_label} {month_label} — OrderedRevenue/Units will be 0")
-        df['OrderedRevenue'] = 0.0
-        df['OrderedUnits']   = 0.0
-
-    df['Impressions']   = df['SP_Impressions'] + df['SD_Impressions']
-    df['Clicks']        = df['SP_Clicks']      + df['SD_Clicks']
-    df['TotalAdsSpend'] = df['SP_Spend']       + df['SD_Spend']
-    df['TotalAdsSales'] = df['SP_Sales']       + df['SD_Sales']
-    df['AmsOrders']     = df['SP_Orders']      + df['SD_Orders']
-    df['OrganiSales']   = (df['NetUnits'] - df['AmsOrders']).clip(lower=0)
-    df['OrganicSalesValue'] = (df['TotalNetSalesValue'] - df['TotalAdsSales']).clip(lower=0)
-    df['OrganicSalesPct'] = np.where(
-        df['TotalNetSalesValue'] > 0,
-        df['OrganicSalesValue'] / df['TotalNetSalesValue'],
-        0
-    )
-    df['AttributedSalesValue'] = df['TotalAdsSales']
-    df['AttributedNumber'] = df['AmsOrders']
-    df['AmazonSalesValue'] = df['OrderedRevenue']
-    df['AmazonUnits'] = df['OrderedUnits']
-
-    df['ACOS']          = np.where(df['TotalAdsSales']      > 0, df['TotalAdsSpend'] / df['TotalAdsSales'],      0)
-    df['TACOS']         = np.where(df['TotalNetSalesValue'] > 0, df['TotalAdsSpend'] / df['TotalNetSalesValue'], 0)
-    df['CAC']           = np.where(df['AmsOrders']          > 0, df['TotalAdsSpend'] / df['AmsOrders'],          0)
-    df['ConversionPct'] = np.where(df['Sessions']           > 0, df['NetUnits']      / df['Sessions'],           0)
-    df['AttributedPct'] = np.where(df['NetUnits']           > 0, df['AmsOrders']     / df['NetUnits'],           0)
-    df['OrganicPct']    = np.where(df['NetUnits']           > 0, df['OrganiSales']   / df['NetUnits'],           0)
-
-    df['Brand'] = brand_label
-    df['Month'] = month_label
-
-    for col in ['ACOS', 'TACOS', 'CAC', 'ConversionPct', 'AttributedPct', 'OrganicPct', 'OrganicSalesPct', 'BuyboxPct']:
-        df[col] = df[col].round(4)
-    for col in ['TotalAdsSpend', 'TotalAdsSales', 'TotalNetSalesValue', 'OrganicSalesValue', 'AttributedSalesValue', 'AmazonSalesValue']:
-        df[col] = df[col].round(2)
-
-    return df[['ASIN', 'Title', 'Sessions', 'BuyboxPct', 'NetUnits', 'TotalNetSalesValue',
-               'Impressions', 'Clicks', 'TotalAdsSpend', 'TotalAdsSales', 'AmsOrders',
-               'Brand', 'Month', 'OrganiSales', 'OrganicSalesValue', 'OrganicSalesPct',
-               'AttributedSalesValue', 'AttributedNumber', 'AmazonSalesValue', 'AmazonUnits', 'ACOS', 'TACOS', 'CAC',
-               'ConversionPct', 'AttributedPct', 'OrganicPct',
-               'OrderedRevenue', 'OrderedUnits']]
-
-# ── Main ──────────────────────────────────────────────────────────────────────
-def main():
-    print("\n BuyBox Ads Report - Data Generator")
-    print("=" * 40)
-
-    frames = []
-    months_found = []
-    combined_master = load_master_data()
-
-    for brand_folder_name, brand_label in BRANDS.items():
-        brand_path = os.path.join(DATA_ROOT, brand_folder_name)
-        if not os.path.exists(brand_path):
-            print(f"\n  Brand folder not found: {brand_path}")
-            continue
-
-        month_folders = sorted([
-            d for d in os.listdir(brand_path)
-            if os.path.isdir(os.path.join(brand_path, d))
-        ])
-
-        print(f"\n  Brand: {brand_label}")
-        for month in month_folders:
-            month_path = os.path.join(brand_path, month)
-            df = process_month(month_path, brand_label, month)
-            if df is not None:
-                frames.append(df)
-                print(f"     → {len(df)} ASINs")
-                if month not in months_found:
-                    months_found.append(month)
-
-    if not frames:
-        print("\n No data found! Check folder structure and file names.")
-        sys.exit(1)
-
-    final = pd.concat(frames, ignore_index=True)
-
-    if not combined_master.empty:
-        final = final.merge(combined_master, on=['Brand', 'ASIN'], how='left')
-        if 'fbaSku_x' in final.columns or 'fbaSku_y' in final.columns:
-            final['fbaSku'] = final.get('fbaSku_y', '').fillna('').astype(str)
-            feed_fba = final.get('fbaSku_x', '').fillna('').astype(str)
-            final['fbaSku'] = final['fbaSku'].where(final['fbaSku'].str.strip() != '', feed_fba)
-            final = final.drop(columns=[col for col in ['fbaSku_x', 'fbaSku_y'] if col in final.columns])
-    else:
-        final['model'] = ''
-        final['category'] = ''
-        final['mainCat'] = ''
-        final['dp'] = np.nan
-        final['nlc'] = np.nan
-
-    if 'fbaSku' not in final.columns:
-        final['fbaSku'] = ''
-
-    for col in ['fbaSku', 'model', 'category', 'mainCat']:
-        final[col] = final[col].fillna('')
-
-    print(f"\n Total rows: {len(final)}")
-    print(f" Months   : {months_found}")
-
-    records = []
-    for _, row in final.iterrows():
-        r = {}
-        for col in final.columns:
-            v = row[col]
-            if isinstance(v, float):
-                r[col] = 0 if (np.isnan(v) or np.isinf(v)) else round(float(v), 4)
-            elif isinstance(v, (np.integer,)):
-                r[col] = int(v)
-            else:
-                r[col] = str(v) if v else ''
-        records.append(r)
-
-    json_str = json.dumps(records, ensure_ascii=False)
-
-    jsx_path = os.path.abspath(JSX_PATH)
-    if not os.path.exists(jsx_path):
-        print(f"\n JSX not found: {jsx_path}")
-        sys.exit(1)
-
-    with open(jsx_path, 'r', encoding='utf-8') as f:
-        jsx = f.read()
-
-    new_jsx = re.sub(
-        r'const RAW_DATA = \[.*?\];',
-        f'const RAW_DATA = {json_str};',
-        jsx, flags=re.DOTALL
-    )
-
-    # Dynamically update the months dropdown array
-    month_order = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-    months_found_sorted = sorted(months_found, key=lambda m: month_order.index(m) if m in month_order else 99)
-    months_js = '["All", ' + ', '.join(f'"{m}"' for m in months_found_sorted) + ']'
-    new_jsx = re.sub(
-        r'const months = \[.*?\];',
-        f'const months = {months_js};',
-        new_jsx
-    )
-
-    # Always ensure React is imported correctly on line 1
-    new_jsx = re.sub(
-        r'^import \{',
-        'import React, {',
-        new_jsx
-    )
-    # Ensure useDeferredValue is imported
-    if 'useDeferredValue' not in new_jsx.split('\n')[0]:
-        new_jsx = re.sub(
-            r'(import React,\s*\{[^}]*)(useEffect)(\s*\})',
-            r'\1useEffect, useDeferredValue\3',
-            new_jsx
-        )
-
-    with open(jsx_path, 'w', encoding='utf-8') as f:
-        f.write(new_jsx)
-
-    print(f"\n Done! Refresh localhost:5173 to see updated dashboard.")
-
-if __name__ == '__main__':
-    main()
+print(f"SKU master: {len(sku_lookup)} ASINs loaded")
+
+# ── Main Loop ─────────────────────────────────────────────────────────────────
+all_rows = []
+
+for brand_name, cfg in CONFIGS.items():
+    for month, files in cfg["months"].items():
+        biz_path = os.path.join(BASE, files["biz"])
+        ads_path = os.path.join(BASE, files["ads"])
+        p1_path  = os.path.join(BASE, files["p1"])
+
+        # ── Business Report ──────────────────────────────────────────────────
+        biz_df = read_file(biz_path)
+        biz_lookup = {}
+        if not biz_df.empty:
+            # Use (Child) ASIN — Amazon's business report format
+            asin_col  = col(biz_df,"child) asin","child asin") or col(biz_df,"asin")
+            sess_col  = col(biz_df,"sessions - total")
+            units_col = col(biz_df,"units ordered")
+            bb_col    = col(biz_df,"featured offer percentage")
+            rev_col   = col(biz_df,"ordered product sales")
+            title_col = col(biz_df,"title")
+            if asin_col:
+                for _, row in biz_df.iterrows():
+                    asin = str(row.get(asin_col,"")).strip().upper()
+                    if not asin or asin=="NAN" or asin=="(CHILD) ASIN": continue
+                    bb_raw = str(row.get(bb_col,"0")).replace("%","") if bb_col else "0"
+                    rev   = safe_float(row.get(rev_col,0)) if rev_col else 0
+                    units = safe_float(row.get(units_col,0)) if units_col else 0
+                    sess  = safe_float(row.get(sess_col,0)) if sess_col else 0
+                    bb    = safe_float(bb_raw)/100
+                    title = str(row.get(title_col,"")).strip() if title_col else ""
+                    if asin in biz_lookup:
+                        # ASIN appears multiple times (parent+child rows) — sum numeric fields, keep largest bb/title
+                        biz_lookup[asin]["sessions"] += sess
+                        biz_lookup[asin]["units_3p"] += units
+                        biz_lookup[asin]["rev_3p"]   += rev
+                        if bb > biz_lookup[asin]["bb_pct"]:
+                            biz_lookup[asin]["bb_pct"] = bb
+                        if title and not biz_lookup[asin]["title"]:
+                            biz_lookup[asin]["title"] = title
+                    else:
+                        biz_lookup[asin] = {
+                            "sessions": sess,
+                            "units_3p": units,
+                            "bb_pct":   bb,
+                            "rev_3p":   rev,
+                            "title":    title,
+                        }
+
+        # ── Ads (read SP+SD+SB; use SP_SD_Combined only if it has rows) ────────
+        ads_lookup = {}
+        if os.path.exists(ads_path):
+            try:
+                xl = pd.ExcelFile(ads_path)
+                combined = xl.parse("SP_SD_Combined", dtype=str) if "SP_SD_Combined" in xl.sheet_names else pd.DataFrame()
+                sheets_to_read = ["SP_SD_Combined"] if len(combined) > 0 else [s for s in xl.sheet_names if s in ("SP","SD","SB")]
+                for sheet in sheets_to_read:
+                    ads_df = xl.parse(sheet, dtype=str)
+                    if ads_df.empty: continue
+                    ads_df.columns = [c.strip() for c in ads_df.columns]
+                    asin_col  = col(ads_df,"advertised asin","asin")
+                    spend_col = col(ads_df,"spend")
+                    sales_col = col(ads_df,"14 day total sales","7 day total sales","sales")
+                    impr_col  = col(ads_df,"impressions")
+                    click_col = col(ads_df,"clicks")
+                    units_col2= col(ads_df,"14 day total units","7 day total units")
+                    if not asin_col: continue
+                    for _, row in ads_df.iterrows():
+                        asin = str(row.get(asin_col,"")).strip().upper()
+                        if not asin or asin=="NAN": continue
+                        spend = safe_float(row.get(spend_col,0)) if spend_col else 0
+                        sales = safe_float(row.get(sales_col,0)) if sales_col else 0
+                        impr  = safe_float(row.get(impr_col,0)) if impr_col else 0
+                        clicks= safe_float(row.get(click_col,0)) if click_col else 0
+                        orders= safe_float(row.get(units_col2,0)) if units_col2 else 0
+                        if asin in ads_lookup:
+                            ads_lookup[asin]["spend"]  += spend
+                            ads_lookup[asin]["sales"]  += sales
+                            ads_lookup[asin]["impr"]   += impr
+                            ads_lookup[asin]["clicks"] += clicks
+                            ads_lookup[asin]["orders"] += orders
+                        else:
+                            ads_lookup[asin] = {"spend":spend,"sales":sales,"impr":impr,"clicks":clicks,"orders":orders}
+            except Exception as e:
+                print(f"  Ads error {ads_path}: {e}")
+
+        # ── 1P Sales ──────────────────────────────────────────────────────────
+        p1_lookup = {}
+        p1_df = read_p1(p1_path)
+        if not p1_df.empty:
+            p1_asin = col(p1_df,"asin")
+            p1_rev  = col(p1_df,"ordered revenue","revenue")
+            p1_units= col(p1_df,"ordered units","units")
+            if p1_asin:
+                for _, row in p1_df.iterrows():
+                    asin = str(row.get(p1_asin,"")).strip().upper()
+                    if not asin or asin=="NAN": continue
+                    p1_lookup[asin] = {
+                        "rev_1p":   safe_float(row.get(p1_rev,0)) if p1_rev else 0,
+                        "units_1p": safe_float(row.get(p1_units,0)) if p1_units else 0,
+                    }
+
+        # ── Merge ─────────────────────────────────────────────────────────────
+        all_asins = set(biz_lookup)|set(ads_lookup)|set(p1_lookup)
+        cnt = 0
+        for asin in all_asins:
+            sku  = sku_lookup.get(asin, {})
+            biz  = biz_lookup.get(asin, {})
+            ads  = ads_lookup.get(asin, {})
+            p1   = p1_lookup.get(asin, {})
+
+            ad_spend  = ads.get("spend", 0)
+            ad_sales  = ads.get("sales", 0)
+            rev_3p    = biz.get("rev_3p", 0)
+            rev_1p    = p1.get("rev_1p", 0)
+            net_sales = rev_3p + rev_1p
+            net_sales_total = net_sales + ad_sales
+            impr      = ads.get("impr", 0)
+            clicks    = ads.get("clicks", 0)
+            ams_orders= ads.get("orders", 0)
+            units_3p  = biz.get("units_3p", 0)
+            units_1p  = p1.get("units_1p", 0)
+            sessions  = biz.get("sessions", 0)
+
+            acos  = round(ad_spend/ad_sales, 4) if ad_sales > 0 else 0
+            tacos = round(ad_spend/net_sales_total, 4) if net_sales_total > 0 else 0
+            cac   = round(ad_spend/ams_orders, 2) if ams_orders > 0 else 0
+            cvr   = round((units_3p+units_1p)/sessions, 4) if sessions > 0 else 0
+            org_sales = max(0, net_sales - ad_sales)
+            org_pct   = round(org_sales/net_sales, 4) if net_sales > 0 else 0
+
+            all_rows.append({
+                "Brand":             brand_name,
+                "ASIN":              asin,
+                "Title":             biz.get("title", ""),
+                "Month":             month,
+                "fbaSku":            sku.get("fba_sku",""),
+                "model":             sku.get("model",""),
+                "category":          sku.get("category",""),
+                "mainCat":           sku.get("mainCat",""),
+                "DP":                sku.get("dp", 0),
+                "Sessions":          sessions,
+                "BuyboxPct":         biz.get("bb_pct", 0),
+                "NetUnits":          units_3p + units_1p,
+                "Units1P":           units_1p,
+                "Units3P":           units_3p,
+                "TotalNetSalesValue":round(net_sales, 2),
+                "Rev1P":             round(rev_1p, 2),
+                "Rev3P":             round(rev_3p, 2),
+                "TotalAdsSpend":     round(ad_spend, 2),
+                "TotalAdsSales":     round(ad_sales, 2),
+                "Impressions":       impr,
+                "Clicks":            clicks,
+                "AmsOrders":         ams_orders,
+                "ACOS":              acos,
+                "TACOS":             tacos,
+                "CAC":               cac,
+                "ConversionPct":     cvr,
+                "OrganiSales":       round(org_sales, 2),
+                "OrganicPct":        org_pct,
+            })
+            cnt += 1
+
+        print(f"  {brand_name} {month}: {cnt} ASINs | BB:{len([v for v in biz_lookup.values() if v['bb_pct']>0])} with BB data")
+
+print(f"\nTotal rows: {len(all_rows)}")
+for b in CONFIGS:
+    cnt = sum(1 for r in all_rows if r["Brand"]==b)
+    bb  = sum(1 for r in all_rows if r["Brand"]==b and r["BuyboxPct"]>0)
+    print(f"  {b}: {cnt} rows, {bb} with BuyboxPct")
+
+out_path = "./src/raw_data.json"
+os.makedirs("./src", exist_ok=True)
+with open(out_path,"w") as f:
+    json.dump(all_rows, f, indent=2)
+print(f"\nWritten to {out_path}")

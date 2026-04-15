@@ -517,6 +517,7 @@ export default function Dashboard() {
   const aiEndRef = React.useRef(null);
   const [detailAsin, setDetailAsin] = useState("");
   const [compareTabAsin, setCompareTabAsin] = useState("");
+  const [modelTabKey, setModelTabKey] = useState("");
   const [topTenView, setTopTenView] = useState("ASIN");
   const [search, setSearch] = useState("");
   const [debSearch, setDebSearch] = useState("");
@@ -562,6 +563,8 @@ export default function Dashboard() {
       const asinMatch = hash.match(/^#asin\/([^?]+)(?:\?m1=([^&]+)&m2=(.+))?$/);
       // Parse #compare/<ASIN>?m1=Jan&m2=Feb
       const compareMatch = hash.match(/^#compare\/([^?]+)(?:\?m1=([^&]+)&m2=(.+))?$/);
+      // Parse #model/<MODEL>
+      const modelMatch = hash.match(/^#model\/(.+)$/);
       const smartViewMatch = hash.match(/^#smart-views(?:\/([^?]+))?$/);
 
       if (asinMatch) {
@@ -578,6 +581,12 @@ export default function Dashboard() {
         if (compareMatch[3]) setCompareM2(compareMatch[3]);
       } else {
         setCompareTabAsin("");
+      }
+
+      if (modelMatch) {
+        setModelTabKey(decodeURIComponent(modelMatch[1]));
+      } else {
+        setModelTabKey("");
       }
 
       if (smartViewMatch) {
@@ -716,6 +725,14 @@ export default function Dashboard() {
     () => enriched.filter((row) => row.ASIN === detailAsin).sort((a, b) => months.indexOf(a.Month) - months.indexOf(b.Month)),
     [enriched, detailAsin]
   );
+
+  // Model tab: all rows matching this model key across all months
+  const modelTabRows = useMemo(
+    () => enriched.filter((row) => (getMasterValue(row, "model") || row.model || "") === modelTabKey)
+           .sort((a, b) => months.indexOf(a.Month) - months.indexOf(b.Month)),
+    [enriched, modelTabKey]
+  );
+  const modelTabMeta = modelTabRows[0] ?? null;
   const detailMeta = detailRows[0] ?? null;
   // Use compareM1/compareM2 directly — no hardcoded Jan/Feb fallback
   const detailM1 = detailRows.find((row) => row.Month === compareM1) ?? null;
@@ -889,6 +906,11 @@ export default function Dashboard() {
     if (!asin) return;
     const detailUrl = `${window.location.pathname}${window.location.search}#asin/${encodeURIComponent(asin)}?m1=${compareM1}&m2=${compareM2}`;
     window.open(detailUrl, "_blank", "noopener,noreferrer");
+  };
+  const openModelPage = (modelKey) => {
+    if (!modelKey) return;
+    const modelUrl = `${window.location.pathname}${window.location.search}#model/${encodeURIComponent(modelKey)}`;
+    window.open(modelUrl, "_blank", "noopener,noreferrer");
   };
   const openComparePage = (asin) => {
     if (!asin) return;
@@ -1142,6 +1164,14 @@ export default function Dashboard() {
                                 <a href={getAmazonProductUrl(row.ASIN)} target="_blank" rel="noreferrer" style={{ color:"#1D4ED8", fontWeight:800, textDecoration:"underline", textUnderlineOffset:"2px" }}>
                                   {disp}
                                 </a>
+                              ) : col.key === "model" && !isEmpty ? (
+                                <span
+                                  onClick={() => openModelPage(v)}
+                                  title={`Open model ${v} detail`}
+                                  style={{ color:"#7C3AED", cursor:"pointer", textDecoration:"underline", textUnderlineOffset:"2px", fontWeight:700 }}
+                                >
+                                  {disp}
+                                </span>
                               ) : disp}
                             </td>
                           );
@@ -1746,6 +1776,250 @@ export default function Dashboard() {
     );
   }
 
+  // ── MODEL DETAIL PAGE ────────────────────────────────────────────────────
+  if (modelTabKey && modelTabMeta) {
+    const allMonths = ["Jan","Feb","Mar"];
+    // One aggregated row per month (model may have multiple ASINs per month)
+    const byMonth = allMonths.map(mon => {
+      const rows = modelTabRows.filter(r => r.Month === mon);
+      if (!rows.length) return null;
+      const sum = (key) => rows.reduce((acc, r) => acc + (r[key] || 0), 0);
+      const wavg = (key, wKey) => {
+        const totalW = sum(wKey);
+        if (!totalW) return 0;
+        return rows.reduce((acc, r) => acc + (r[key] || 0) * (r[wKey] || 0), 0) / totalW;
+      };
+      const adSpend = sum("TotalAdsSpend");
+      const adSales = sum("TotalAdsSales");
+      const netSales = sum("TotalNetSalesValue");
+      const amsOrders = sum("AmsOrders");
+      return {
+        Month: mon,
+        Sessions: sum("Sessions"),
+        NetUnits: sum("NetUnits"),
+        TotalNetSalesValue: netSales,
+        TotalAdsSpend: adSpend,
+        TotalAdsSales: adSales,
+        Impressions: sum("Impressions"),
+        Clicks: sum("Clicks"),
+        AmsOrders: amsOrders,
+        OrganiSales: sum("OrganiSales"),
+        BuyboxPct: wavg("BuyboxPct","Sessions"),
+        ACOS: adSales > 0 ? adSpend / adSales : 0,
+        TACOS: (netSales + adSales) > 0 ? adSpend / (netSales + adSales) : 0,
+        CAC: amsOrders > 0 ? adSpend / amsOrders : 0,
+        ConversionPct: sum("Sessions") > 0 ? sum("NetUnits") / sum("Sessions") : 0,
+        OrganicPct: netSales > 0 ? Math.max(0, netSales - adSales) / netSales : 0,
+        asinCount: rows.length,
+      };
+    }).filter(Boolean);
+
+    // All unique ASINs for this model
+    const modelAsins = [...new Set(modelTabRows.map(r => r.ASIN))];
+
+    // Growth cards Jan→latest available
+    const firstMon = byMonth[0];
+    const lastMon = byMonth[byMonth.length - 1];
+    const growthCards = [
+      { label: "Sales Growth", jan: firstMon?.TotalNetSalesValue ?? 0, feb: lastMon?.TotalNetSalesValue ?? 0, fmt: "currency", accent: "#2563EB" },
+      { label: "Ad Sales Growth", jan: firstMon?.TotalAdsSales ?? 0, feb: lastMon?.TotalAdsSales ?? 0, fmt: "currency", accent: "#EC4899" },
+      { label: "Units Growth", jan: firstMon?.NetUnits ?? 0, feb: lastMon?.NetUnits ?? 0, fmt: "number", accent: "#10B981" },
+      { label: "Buybox Growth", jan: (firstMon?.BuyboxPct ?? 0)*100, feb: (lastMon?.BuyboxPct ?? 0)*100, fmt: "pct", accent: "#F59E0B" },
+    ].map(m => {
+      const delta = m.feb - m.jan;
+      const growthPct = m.jan > 0 ? (delta / m.jan) * 100 : m.feb > 0 ? 100 : 0;
+      return { ...m, delta, growthPct };
+    });
+
+    // Summary totals across all months
+    const totAdSpend  = byMonth.reduce((a,r) => a + r.TotalAdsSpend, 0);
+    const totAdSales  = byMonth.reduce((a,r) => a + r.TotalAdsSales, 0);
+    const totNetSales = byMonth.reduce((a,r) => a + r.TotalNetSalesValue, 0);
+    const totUnits    = byMonth.reduce((a,r) => a + r.NetUnits, 0);
+    const totOrders   = byMonth.reduce((a,r) => a + r.AmsOrders, 0);
+    const totClicks   = byMonth.reduce((a,r) => a + r.Clicks, 0);
+    const totImpr     = byMonth.reduce((a,r) => a + r.Impressions, 0);
+    const totSessions = byMonth.reduce((a,r) => a + r.Sessions, 0);
+    const overallACOS  = totAdSales  > 0 ? totAdSpend / totAdSales  : 0;
+    const overallTACOS = (totNetSales + totAdSales) > 0 ? totAdSpend / (totNetSales + totAdSales) : 0;
+    const overallCAC   = totOrders   > 0 ? totAdSpend / totOrders   : 0;
+    const overallBB    = byMonth.reduce((a,r,_,arr) => a + r.BuyboxPct / arr.length, 0);
+
+    return (
+      <div style={{ fontFamily:"'Inter','Segoe UI',sans-serif", background:`linear-gradient(180deg,${THEME.pageBg} 0%,${THEME.shellBg} 52%,${THEME.panelBg} 100%)`, minHeight:"100vh", color:THEME.text }}>
+
+        {/* ── Header ── */}
+        <div style={{ background:`linear-gradient(90deg,${THEME.headerBg} 0%,${THEME.surfaceSoft} 100%)`, padding:"16px 24px", borderBottom:`1px solid ${THEME.border}` }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:16, flexWrap:"wrap" }}>
+            <div>
+              <div style={{ fontSize:26, fontWeight:800, letterSpacing:-0.8, fontFamily:"'DM Mono',monospace" }}>
+                {modelTabKey}
+                <span style={{ marginLeft:12, fontSize:13, fontWeight:400, color:THEME.textMuted, letterSpacing:0 }}>Model Overview</span>
+              </div>
+              <div style={{ fontSize:11, color:THEME.textMuted, marginTop:4, fontFamily:"'DM Mono',monospace", letterSpacing:1.1 }}>
+                {modelTabMeta.Brand} · {modelTabMeta.mainCat || modelTabMeta.category || "—"} · {modelAsins.length} ASIN{modelAsins.length !== 1 ? "s" : ""}
+              </div>
+            </div>
+            <button
+              onClick={() => { if (window.opener) window.close(); else window.history.back(); }}
+              style={{ padding:"10px 18px", borderRadius:999, background:"#2563EB", border:"none", color:"#fff", fontSize:12, fontWeight:700, cursor:"pointer" }}
+            >
+              {window.opener ? "Close Tab" : "← Back"}
+            </button>
+          </div>
+        </div>
+
+        <div style={{ padding:"24px" }}>
+
+          {/* ── Summary KPI Cards ── */}
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(4,minmax(0,1fr))", gap:14, marginBottom:20 }}>
+            {[
+              { label:"Total Net Sales",  value: inr(totNetSales),   accent:"#2563EB" },
+              { label:"Total Units",      value: totUnits.toLocaleString("en-IN"), accent:"#10B981" },
+              { label:"Total Ads Spend",  value: inr(totAdSpend),    accent:"#EC4899" },
+              { label:"Total Ads Sales",  value: inr(totAdSales),    accent:"#F97316" },
+              { label:"Overall ACOS",     value: `${(overallACOS*100).toFixed(1)}%`,  accent:"#7C3AED" },
+              { label:"Overall TACOS",    value: `${(overallTACOS*100).toFixed(1)}%`, accent:"#0EA5E9" },
+              { label:"Avg Buybox %",     value: `${(overallBB*100).toFixed(1)}%`,    accent:"#F59E0B" },
+              { label:"Overall CAC",      value: inr(overallCAC),    accent:"#64748B" },
+            ].map(card => (
+              <div key={card.label} style={{ background:"#fff", border:"1px solid #D8E1EC", borderLeft:`4px solid ${card.accent}`, borderRadius:14, padding:"14px 16px", boxShadow:"0 8px 20px rgba(15,23,42,0.05)" }}>
+                <div style={{ fontSize:9.5, color:"#64748B", fontFamily:"'DM Mono',monospace", letterSpacing:1.3, textTransform:"uppercase", marginBottom:6 }}>{card.label}</div>
+                <div style={{ fontSize:22, fontWeight:800, color:card.accent, letterSpacing:-0.5 }}>{card.value}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* ── Growth Cards (first → last month) ── */}
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(4,minmax(0,1fr))", gap:14, marginBottom:20 }}>
+            {growthCards.map(m => (
+              <div key={m.label} style={{ padding:"14px", borderRadius:14, background:"#fff", border:"1px solid #D8E1EC", boxShadow:"0 8px 20px rgba(15,23,42,0.04)", borderLeft:`4px solid ${m.growthPct >= 0 ? "#10B981" : "#EF4444"}` }}>
+                <div style={{ fontSize:10, color:"#64748B", marginBottom:6, fontFamily:"'DM Mono',monospace", letterSpacing:0.8, textTransform:"uppercase" }}>{m.label}</div>
+                <div style={{ fontSize:22, fontWeight:800, color: m.growthPct >= 0 ? "#059669" : "#DC2626" }}>
+                  {m.growthPct >= 0 ? "+" : ""}{m.growthPct.toFixed(1)}%
+                </div>
+                <div style={{ fontSize:11, color:"#64748B", marginTop:6 }}>
+                  {byMonth[0]?.Month} {m.fmt === "currency" ? inr(m.jan) : m.fmt === "pct" ? `${m.jan.toFixed(1)}%` : m.jan.toLocaleString("en-IN")}
+                  {" → "}
+                  {byMonth[byMonth.length-1]?.Month} {m.fmt === "currency" ? inr(m.feb) : m.fmt === "pct" ? `${m.feb.toFixed(1)}%` : m.feb.toLocaleString("en-IN")}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* ── Monthly Summary Breakdown ── */}
+          <div style={{ background:"#fff", border:"1px solid #D8E1EC", borderRadius:16, boxShadow:"0 10px 24px rgba(15,23,42,0.05)", marginBottom:20, overflow:"hidden" }}>
+            <div style={{ padding:"12px 18px", background:`linear-gradient(90deg,#EEF2FF,transparent)`, borderBottom:"1px solid #E2E8F0", fontSize:10, fontFamily:"'DM Mono',monospace", letterSpacing:0.9, textTransform:"uppercase", color:"#334155", fontWeight:700 }}>
+              Monthly Breakdown — {modelTabKey}
+            </div>
+            <div style={{ overflowX:"auto" }}>
+              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
+                <thead>
+                  <tr style={{ background:"#F8FAFC" }}>
+                    {["Month","ASINs","Sessions","Net Units","Net Sales","Ads Spend","Ads Sales","AMS Orders","Impressions","Clicks","Buybox %","ACOS","TACOS","CAC","CVR","Organic %"].map(h => (
+                      <th key={h} style={{ padding:"9px 12px", textAlign: h==="Month"||h==="ASINs" ? "left" : "right", fontFamily:"'DM Mono',monospace", fontSize:9.5, textTransform:"uppercase", letterSpacing:0.8, color:"#64748B", borderBottom:"1px solid #E2E8F0", whiteSpace:"nowrap" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {byMonth.map((r, i) => (
+                    <tr key={r.Month} style={{ background: i%2===0 ? "#fff" : "#F8FAFC", borderBottom:"1px solid #F1F5F9" }}>
+                      <td style={{ padding:"8px 12px", fontWeight:700, fontFamily:"'DM Mono',monospace", fontSize:12, color:"#1E293B" }}>{r.Month} 2026</td>
+                      <td style={{ padding:"8px 12px", textAlign:"left", color:"#64748B" }}>{r.asinCount}</td>
+                      <td style={{ padding:"8px 12px", textAlign:"right" }}>{r.Sessions.toLocaleString("en-IN")}</td>
+                      <td style={{ padding:"8px 12px", textAlign:"right", fontWeight:700 }}>{r.NetUnits.toLocaleString("en-IN")}</td>
+                      <td style={{ padding:"8px 12px", textAlign:"right", fontWeight:700, color:"#2563EB" }}>{inr(r.TotalNetSalesValue)}</td>
+                      <td style={{ padding:"8px 12px", textAlign:"right", color:"#EC4899" }}>{inr(r.TotalAdsSpend)}</td>
+                      <td style={{ padding:"8px 12px", textAlign:"right", color:"#F97316" }}>{inr(r.TotalAdsSales)}</td>
+                      <td style={{ padding:"8px 12px", textAlign:"right" }}>{r.AmsOrders.toLocaleString("en-IN")}</td>
+                      <td style={{ padding:"8px 12px", textAlign:"right", color:"#94A3B8" }}>{r.Impressions.toLocaleString("en-IN")}</td>
+                      <td style={{ padding:"8px 12px", textAlign:"right", color:"#94A3B8" }}>{r.Clicks.toLocaleString("en-IN")}</td>
+                      <td style={{ padding:"8px 12px", textAlign:"right", color:"#F59E0B", fontWeight:700 }}>{(r.BuyboxPct*100).toFixed(1)}%</td>
+                      <td style={{ padding:"8px 12px", textAlign:"right", color: r.ACOS > 0.4 ? "#EF4444" : "#059669", fontWeight:600 }}>{(r.ACOS*100).toFixed(1)}%</td>
+                      <td style={{ padding:"8px 12px", textAlign:"right", color:"#7C3AED" }}>{(r.TACOS*100).toFixed(1)}%</td>
+                      <td style={{ padding:"8px 12px", textAlign:"right" }}>{inr(r.CAC)}</td>
+                      <td style={{ padding:"8px 12px", textAlign:"right" }}>{(r.ConversionPct*100).toFixed(2)}%</td>
+                      <td style={{ padding:"8px 12px", textAlign:"right", color:"#10B981" }}>{(r.OrganicPct*100).toFixed(1)}%</td>
+                    </tr>
+                  ))}
+                  {/* Totals row */}
+                  <tr style={{ background:"#EEF2FF", borderTop:"2px solid #C7D2FE", fontWeight:700 }}>
+                    <td style={{ padding:"9px 12px", fontFamily:"'DM Mono',monospace", fontSize:12, color:"#1E293B" }}>TOTAL</td>
+                    <td style={{ padding:"9px 12px", color:"#64748B" }}>—</td>
+                    <td style={{ padding:"9px 12px", textAlign:"right" }}>{totSessions.toLocaleString("en-IN")}</td>
+                    <td style={{ padding:"9px 12px", textAlign:"right" }}>{totUnits.toLocaleString("en-IN")}</td>
+                    <td style={{ padding:"9px 12px", textAlign:"right", color:"#2563EB" }}>{inr(totNetSales)}</td>
+                    <td style={{ padding:"9px 12px", textAlign:"right", color:"#EC4899" }}>{inr(totAdSpend)}</td>
+                    <td style={{ padding:"9px 12px", textAlign:"right", color:"#F97316" }}>{inr(totAdSales)}</td>
+                    <td style={{ padding:"9px 12px", textAlign:"right" }}>{totOrders.toLocaleString("en-IN")}</td>
+                    <td style={{ padding:"9px 12px", textAlign:"right", color:"#94A3B8" }}>{totImpr.toLocaleString("en-IN")}</td>
+                    <td style={{ padding:"9px 12px", textAlign:"right", color:"#94A3B8" }}>{totClicks.toLocaleString("en-IN")}</td>
+                    <td style={{ padding:"9px 12px", textAlign:"right", color:"#F59E0B" }}>{(overallBB*100).toFixed(1)}%</td>
+                    <td style={{ padding:"9px 12px", textAlign:"right", color: overallACOS > 0.4 ? "#EF4444" : "#059669" }}>{(overallACOS*100).toFixed(1)}%</td>
+                    <td style={{ padding:"9px 12px", textAlign:"right", color:"#7C3AED" }}>{(overallTACOS*100).toFixed(1)}%</td>
+                    <td style={{ padding:"9px 12px", textAlign:"right" }}>{inr(overallCAC)}</td>
+                    <td style={{ padding:"9px 12px", textAlign:"right" }}>—</td>
+                    <td style={{ padding:"9px 12px", textAlign:"right", color:"#10B981" }}>—</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* ── Per-ASIN Detail Table ── */}
+          <div style={{ background:"#fff", border:"1px solid #D8E1EC", borderRadius:16, boxShadow:"0 10px 24px rgba(15,23,42,0.05)", overflow:"hidden" }}>
+            <div style={{ padding:"12px 18px", background:`linear-gradient(90deg,#F0FDF4,transparent)`, borderBottom:"1px solid #E2E8F0", fontSize:10, fontFamily:"'DM Mono',monospace", letterSpacing:0.9, textTransform:"uppercase", color:"#334155", fontWeight:700 }}>
+              All ASINs under {modelTabKey} — Full Metrics
+            </div>
+            <div style={{ overflowX:"auto" }}>
+              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:11.5 }}>
+                <thead>
+                  <tr style={{ background:"#F8FAFC" }}>
+                    {["ASIN","Month","Title","Sessions","Net Units","Net Sales","Ads Spend","Ads Sales","AMS Orders","Buybox %","ACOS","TACOS","CAC","CVR","Organic %","Action"].map(h => (
+                      <th key={h} style={{ padding:"9px 12px", textAlign: ["ASIN","Month","Title","Action"].includes(h) ? "left" : "right", fontFamily:"'DM Mono',monospace", fontSize:9.5, textTransform:"uppercase", letterSpacing:0.7, color:"#64748B", borderBottom:"1px solid #E2E8F0", whiteSpace:"nowrap", position:"sticky", top:0, background:"#F8FAFC", zIndex:2 }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {modelTabRows.map((r, i) => (
+                    <tr key={`${r.ASIN}-${r.Month}-${i}`} style={{ background: i%2===0 ? "#fff" : "#F8FAFC", borderBottom:"1px solid #F1F5F9" }}>
+                      <td style={{ padding:"6px 12px", fontFamily:"'DM Mono',monospace", fontSize:11, fontWeight:800, color:"#1D4ED8" }}>
+                        <a href={getAmazonProductUrl(r.ASIN)} target="_blank" rel="noreferrer" style={{ color:"#1D4ED8", textDecoration:"underline", textUnderlineOffset:"2px" }}>{r.ASIN}</a>
+                      </td>
+                      <td style={{ padding:"6px 12px", fontFamily:"'DM Mono',monospace", fontWeight:700, color:"#475569", fontSize:11 }}>{r.Month}</td>
+                      <td style={{ padding:"6px 12px", maxWidth:180, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", color:"#334155" }} title={r.Title}>{r.Title || "—"}</td>
+                      <td style={{ padding:"6px 12px", textAlign:"right" }}>{(r.Sessions||0).toLocaleString("en-IN")}</td>
+                      <td style={{ padding:"6px 12px", textAlign:"right", fontWeight:700 }}>{(r.NetUnits||0).toLocaleString("en-IN")}</td>
+                      <td style={{ padding:"6px 12px", textAlign:"right", fontWeight:700, color:"#2563EB" }}>{inr(r.TotalNetSalesValue||0)}</td>
+                      <td style={{ padding:"6px 12px", textAlign:"right", color:"#EC4899" }}>{inr(r.TotalAdsSpend||0)}</td>
+                      <td style={{ padding:"6px 12px", textAlign:"right", color:"#F97316" }}>{inr(r.TotalAdsSales||0)}</td>
+                      <td style={{ padding:"6px 12px", textAlign:"right" }}>{(r.AmsOrders||0).toLocaleString("en-IN")}</td>
+                      <td style={{ padding:"6px 12px", textAlign:"right", color:"#F59E0B", fontWeight:700 }}>{((r.BuyboxPct||0)*100).toFixed(1)}%</td>
+                      <td style={{ padding:"6px 12px", textAlign:"right", color:(r.ACOS||0)>0.4?"#EF4444":"#059669", fontWeight:600 }}>{((r.ACOS||0)*100).toFixed(1)}%</td>
+                      <td style={{ padding:"6px 12px", textAlign:"right", color:"#7C3AED" }}>{((r.TACOS||0)*100).toFixed(1)}%</td>
+                      <td style={{ padding:"6px 12px", textAlign:"right" }}>{inr(r.CAC||0)}</td>
+                      <td style={{ padding:"6px 12px", textAlign:"right" }}>{((r.ConversionPct||0)*100).toFixed(2)}%</td>
+                      <td style={{ padding:"6px 12px", textAlign:"right", color:"#10B981" }}>{((r.OrganicPct||0)*100).toFixed(1)}%</td>
+                      <td style={{ padding:"6px 12px" }}>
+                        <button
+                          onClick={() => openDetailPage(r.ASIN)}
+                          style={{ padding:"4px 10px", borderRadius:999, background:"#EFF6FF", border:"1px solid #BFDBFE", color:"#1D4ED8", fontSize:10, fontWeight:700, cursor:"pointer", whiteSpace:"nowrap" }}
+                        >
+                          ASIN Detail
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    );
+  }
+
   if (detailMeta) {
     return (
       <div style={{ fontFamily: "'Inter', 'Segoe UI', sans-serif", background: `linear-gradient(180deg, ${THEME.pageBg} 0%, ${THEME.shellBg} 52%, ${THEME.panelBg} 100%)`, minHeight: "100vh", color: THEME.text }}>
@@ -2261,6 +2535,14 @@ export default function Dashboard() {
                             >
                               {String(row.Title).split("|")[0].split(",")[0].trim().slice(0,32)}
                             </button>
+                          ) : col.key === "model" && !isEmpty ? (
+                            <span
+                              onClick={() => openModelPage(v)}
+                              title={`Open model ${v} detail`}
+                              style={{ color:"#7C3AED", cursor:"pointer", textDecoration:"underline", textUnderlineOffset:"2px", fontWeight:700 }}
+                            >
+                              {disp}
+                            </span>
                           ) : isPct && v > 0
                             ? <span style={{
                                 display:"inline-block",

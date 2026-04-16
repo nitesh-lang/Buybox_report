@@ -88,18 +88,35 @@ cat_l1_c = next((c for c in sku_df.columns if c.strip().lower()=="category_l1"),
 nlc_c   = col(sku_df,"nlc","net landed")
 brand_c = col(sku_df,"brand")
 
+def clean_str(v):
+    """Strip whitespace; convert pandas nan/NaT/None strings to empty string."""
+    s = str(v).strip() if v is not None else ""
+    return "" if s.lower() in ("nan", "nat", "none") else s
+
 for _, row in sku_df.iterrows():
-    asin = str(row.get(asin_c,"")).strip().upper() if asin_c else ""
-    if not asin or asin=="NAN": continue
-    nlc = safe_float(row.get(nlc_c,0)) if nlc_c else 0
-    main_cat = str(row.get(cat_l0_c,"")).strip() if cat_l0_c else ""
-    category = str(row.get(cat_l1_c,"")).strip() if cat_l1_c else main_cat
+    asin = clean_str(row.get(asin_c, "") if asin_c else "").upper()
+    if not asin: continue
+    nlc      = safe_float(row.get(nlc_c, 0)) if nlc_c else 0
+    main_cat = clean_str(row.get(cat_l0_c, "")) if cat_l0_c else ""
+    cat_l1   = clean_str(row.get(cat_l1_c, "")) if cat_l1_c else ""
+    # Brand-specific category rule:
+    # Nexlev  → use category_l1 (specific subcategory)
+    # All others (Audio Array, Tonor, White Mulberry, Fossil) → use category_l0 (broad)
+    brand_val = clean_str(row.get(brand_c, "")) if brand_c else ""
+    if brand_val == "Nexlev":
+        category = cat_l1 if cat_l1 else main_cat
+    else:
+        category = main_cat if main_cat else cat_l1
+    # Skip this row if ASIN already mapped with richer data (duplicate rows in SKU master)
+    existing = sku_lookup.get(asin)
+    if existing and (existing["category"] or existing["mainCat"]) and not category:
+        continue
     sku_lookup[asin] = {
-        "fba_sku":  str(row.get(fba_c,"")).strip() if fba_c else "",
-        "model":    str(row.get(model_c,"")).strip() if model_c else "",
+        "fba_sku":  clean_str(row.get(fba_c,  "")) if fba_c   else "",
+        "model":    clean_str(row.get(model_c, "")) if model_c else "",
         "category": category,
         "mainCat":  main_cat,
-        "dp":       round(nlc/1.18, 2) if nlc else 0,
+        "dp":       round(nlc / 1.18, 2) if nlc else 0,
     }
 print(f"SKU master: {len(sku_lookup)} ASINs loaded")
 
@@ -233,15 +250,20 @@ for brand_name, cfg in CONFIGS.items():
             org_sales = max(0, net_sales - ad_sales)
             org_pct   = round(org_sales/net_sales, 4) if net_sales > 0 else 0
 
+            def _s(v):
+                """Ensure nan-string values become empty string in output."""
+                s = str(v).strip() if v else ""
+                return "" if s.lower() in ("nan","nat","none") else s
+
             all_rows.append({
                 "Brand":             brand_name,
                 "ASIN":              asin,
                 "Title":             biz.get("title", ""),
                 "Month":             month,
-                "fbaSku":            sku.get("fba_sku",""),
-                "model":             sku.get("model",""),
-                "category":          sku.get("category",""),
-                "mainCat":           sku.get("mainCat",""),
+                "fbaSku":            _s(sku.get("fba_sku","")),
+                "model":             _s(sku.get("model","")),
+                "category":          _s(sku.get("category","")),
+                "mainCat":           _s(sku.get("mainCat","")),
                 "DP":                sku.get("dp", 0),
                 "Sessions":          sessions,
                 "BuyboxPct":         biz.get("bb_pct", 0),

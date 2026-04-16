@@ -300,13 +300,15 @@ function getMasterValue(row, key) {
 }
 
 function getCategoryBucket(row, masterData = ACTIVE_MASTER_DATA) {
-  const master = masterData[row.ASIN] ?? {};
-
-  if (row.Brand === "Audio Array") {
-    return master.category || row.category || master.mainCat || row.mainCat || "";
+  const master   = masterData[row.ASIN] ?? {};
+  const specific = master.category || row.category || "";
+  const broad    = master.mainCat  || row.mainCat  || "";
+  const clean    = v => (v && v !== "nan") ? v : "";
+  // Nexlev → category_l1 (specific); all others → category_l0 (broad)
+  if (row.Brand === "Nexlev") {
+    return clean(specific) || clean(broad);
   }
-
-  return master.mainCat || row.mainCat || master.category || row.category || "";
+  return clean(broad) || clean(specific);
 }
 
 function fmtCell(row, col) {
@@ -500,13 +502,174 @@ function TrendLineChart({ points, color = "#38BDF8", valueType = "number", svgRe
   );
 }
 
+
+// ── MultiSelect pill filter component ──────────────────────────────────────
+function MultiSelectFilter({ label, selected, setSelected, opts, onClear, isActive }) {
+  const [open, setOpen] = React.useState(false);
+  const ref = React.useRef(null);
+  React.useEffect(() => {
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+  const toggle = (v) => {
+    setSelected(prev => prev.includes(v) ? prev.filter(x => x !== v) : [...prev, v]);
+  };
+  const displayLabel = selected.length === 0
+    ? `All ${label}s`
+    : selected.length === 1
+    ? selected[0]
+    : `${selected.length} ${label}s`;
+  return (
+    <div ref={ref} style={{ position:"relative" }}>
+      <div
+        onClick={() => setOpen(o => !o)}
+        style={{
+          display:"flex", gap:6, alignItems:"center", padding:"7px 10px", borderRadius:8,
+          background: isActive ? "#EFF6FF" : "#1E293B",
+          border: isActive ? "1px solid #3B82F6" : "1px solid #334155",
+          cursor:"pointer", userSelect:"none", minWidth:100
+        }}
+      >
+        <span style={{ fontSize:10, color: isActive ? "#2563EB" : "#64748B", fontFamily:"'DM Mono',monospace", letterSpacing:0.8, textTransform:"uppercase", fontWeight:600, whiteSpace:"nowrap" }}>{label}</span>
+        <span style={{ fontSize:12, color: isActive ? "#1D4ED8" : "#CBD5E1", whiteSpace:"nowrap" }}>{displayLabel}</span>
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={isActive?"#3B82F6":"#94A3B8"} strokeWidth="2" style={{ marginLeft:2, flexShrink:0 }}><polyline points={open?"18 15 12 9 6 15":"6 9 12 15 18 9"}/></svg>
+      </div>
+      {open && (
+        <div style={{
+          position:"absolute", top:"calc(100% + 4px)", left:0, zIndex:200,
+          background:"#1E293B", border:"1px solid #334155", borderRadius:10,
+          minWidth:190, boxShadow:"0 8px 24px rgba(0,0,0,0.4)", padding:"6px 0",
+          maxHeight:320, display:"flex", flexDirection:"column"
+        }}>
+          <div
+            onClick={() => { setSelected([]); }}
+            style={{ padding:"7px 14px", fontSize:12, color: selected.length===0?"#3B82F6":"#94A3B8", cursor:"pointer", fontWeight: selected.length===0?700:400 }}
+          >All {label}s</div>
+          <div style={{ height:1, background:"#334155", margin:"4px 0" }}/>
+          <div style={{ overflowY:"auto", flex:1 }}>
+          {opts.map(o => (
+            <div
+              key={o.v}
+              onClick={() => toggle(o.v)}
+              style={{
+                padding:"7px 14px", fontSize:12, cursor:"pointer",
+                color: selected.includes(o.v) ? "#3B82F6" : "#CBD5E1",
+                fontWeight: selected.includes(o.v) ? 700 : 400,
+                display:"flex", alignItems:"center", gap:8
+              }}
+            >
+              <div style={{
+                width:14, height:14, borderRadius:4, flexShrink:0,
+                border: selected.includes(o.v) ? "2px solid #3B82F6" : "2px solid #475569",
+                background: selected.includes(o.v) ? "#3B82F6" : "transparent",
+                display:"flex", alignItems:"center", justifyContent:"center"
+              }}>
+                {selected.includes(o.v) && <svg width="8" height="8" viewBox="0 0 12 12"><polyline points="2,6 5,9 10,3" stroke="white" strokeWidth="2" fill="none"/></svg>}
+              </div>
+              {o.l}
+            </div>
+          ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main Dashboard ─────────────────────────────────────────────────────────
+// ── Module-level constants (stable across renders) ─────────────────────────
+const TABLE_PAGE_SIZE = 25;
+
+// Returns display-ready metric values for a row based on the active data mode.
+// "biz" = Business Report  →  Rev3P, Units3P, Sessions, BuyboxPct
+// "p1"  = 1P Sales         →  Rev1P, Units1P, Sessions/BB hidden (shown as null)
+function getMetrics(row, mode) {
+  // "all" = combined (Rev1P+Rev3P), "biz" = Amazon Sales 3P only, "p1" = 1P only
+  if (mode === "all") {
+    const rev   = row.TotalNetSalesValue || 0;
+    const units = row.NetUnits || 0;
+    const spend = row.TotalAdsSpend || 0;
+    const adSales = row.TotalAdsSales || 0;
+    const tacos = (rev + adSales) > 0 ? spend / (rev + adSales) : 0;
+    const acos  = adSales > 0 ? spend / adSales : 0;
+    const cac   = (row.AmsOrders || 0) > 0 ? spend / row.AmsOrders : 0;
+    const orgSales = Math.max(0, rev - adSales);
+    return {
+      revenue: rev, units,
+      sessions: row.Sessions || 0,
+      buybox: row.BuyboxPct || 0,
+      adSpend: spend, adSales, acos, tacos, cac,
+      amsOrders: row.AmsOrders || 0,
+      impressions: row.Impressions || 0,
+      clicks: row.Clicks || 0,
+      orgSales, orgPct: rev > 0 ? orgSales / rev : 0,
+      cvr: (row.Sessions || 0) > 0 ? units / row.Sessions : 0,
+    };
+  }
+  if (mode === "p1") {
+    const rev   = row.Rev1P   || 0;
+    const units = row.Units1P || 0;
+    const spend = row.TotalAdsSpend || 0;
+    const adSales = row.TotalAdsSales || 0;
+    const tacos = (rev + adSales) > 0 ? spend / (rev + adSales) : 0;
+    const acos  = adSales > 0 ? spend / adSales : 0;
+    const cac   = (row.AmsOrders || 0) > 0 ? spend / row.AmsOrders : 0;
+    return {
+      revenue:   rev,
+      units,
+      sessions:  null,   // not available in 1P
+      buybox:    null,   // not available in 1P
+      adSpend:   spend,
+      adSales,
+      acos,
+      tacos,
+      cac,
+      amsOrders: row.AmsOrders || 0,
+      impressions: row.Impressions || 0,
+      clicks:    row.Clicks || 0,
+      orgSales:  null,
+      orgPct:    null,
+      cvr:       null,
+    };
+  }
+  // default: "biz" — Business Report
+  const rev   = row.Rev3P   || 0;
+  const units = row.Units3P || 0;
+  const spend = row.TotalAdsSpend || 0;
+  const adSales = row.TotalAdsSales || 0;
+  const tacos = (rev + adSales) > 0 ? spend / (rev + adSales) : 0;
+  const acos  = adSales > 0 ? spend / adSales : 0;
+  const cac   = (row.AmsOrders || 0) > 0 ? spend / row.AmsOrders : 0;
+  const orgSales = Math.max(0, rev - adSales);
+  const orgPct   = rev > 0 ? orgSales / rev : 0;
+  const cvr = (row.Sessions || 0) > 0 ? units / row.Sessions : 0;
+  return {
+    revenue:    rev,
+    units,
+    sessions:   row.Sessions   || 0,
+    buybox:     row.BuyboxPct  || 0,
+    adSpend:    spend,
+    adSales,
+    acos,
+    tacos,
+    cac,
+    amsOrders:  row.AmsOrders  || 0,
+    impressions: row.Impressions || 0,
+    clicks:     row.Clicks     || 0,
+    orgSales,
+    orgPct,
+    cvr,
+  };
+}
+
 export default function Dashboard() {
   const [dataRows] = useState(RAW_DATA);
   const [masterData] = useState(MASTER_DATA);
-  const [brand, setBrand]   = useState("");
-  const [month, setMonth]   = useState("All");
+  const [brand, setBrand]   = useState([]);
+  const [month, setMonth]   = useState([]);
   const [cat, setCat]       = useState("");
+  const [dataMode, setDataMode] = useState("all"); // "all" = combined, "biz" = Amazon Sales (3P), "p1" = 1P Sales
   const [compareAsin, setCompareAsin] = useState("");
   const [compareM1, setCompareM1] = useState("Jan");
   const [compareM2, setCompareM2] = useState("Feb");
@@ -518,6 +681,7 @@ export default function Dashboard() {
   const [detailAsin, setDetailAsin] = useState("");
   const [compareTabAsin, setCompareTabAsin] = useState("");
   const [modelTabKey, setModelTabKey] = useState("");
+  const [selectedModelMonth, setSelectedModelMonth] = useState("All");
   const [topTenView, setTopTenView] = useState("ASIN");
   const [search, setSearch] = useState("");
   const [debSearch, setDebSearch] = useState("");
@@ -536,15 +700,17 @@ export default function Dashboard() {
   const [ctSearch, setCtSearch] = useState("");
   const [smartViewPage, setSmartViewPage] = useState(false);
   const [tablePage, setTablePage] = useState(1);
-  const TABLE_PAGE_SIZE = 25;
-  const [, startT]          = useTransition();
+  const [isSearchPending, startT] = useTransition();
   const timer               = useRef(null);
   const tableScrollerRef    = useRef(null);
   const detailChartRef      = useRef(null);
   const comparisonChartRef  = useRef(null);
   const deferredSearch      = useDeferredValue(debSearch);
 
-  ACTIVE_MASTER_DATA = masterData;
+  // Sync module-level lookup used by getMasterValue / fmtCell helpers.
+  // useMemo ensures this runs during render in a deterministic order,
+  // before any child reads from ACTIVE_MASTER_DATA.
+  useMemo(() => { ACTIVE_MASTER_DATA = masterData; }, [masterData]);
 
   useEffect(() => {
     if (compareTabAsin) {
@@ -585,6 +751,7 @@ export default function Dashboard() {
 
       if (modelMatch) {
         setModelTabKey(decodeURIComponent(modelMatch[1]));
+        setSelectedModelMonth("All");
       } else {
         setModelTabKey("");
       }
@@ -607,7 +774,7 @@ export default function Dashboard() {
   const brands = useMemo(() => [...new Set(dataRows.map((row) => row.Brand))].sort(), [dataRows]);
   const months = ["All", "Jan", "Feb", "Mar"];
   const brandScopedRows = useMemo(
-    () => dataRows.filter((row) => !brand || row.Brand === brand),
+    () => dataRows.filter((row) => brand.length === 0 || brand.includes(row.Brand)),
     [dataRows, brand]
   );
   const cats   = useMemo(() => [...new Set(brandScopedRows.map((row) => getCategoryBucket(row, masterData)).filter(Boolean))].sort(), [brandScopedRows, masterData]);
@@ -635,20 +802,37 @@ export default function Dashboard() {
     const out = [];
     for (let i = 0; i < dataRows.length; i++) {
       const r = dataRows[i];
-      const key = r.ASIN + "|" + r.Month;
+      const key = r.ASIN + "|" + r.Month + "|" + r.Brand;
       if (seen.has(key)) continue;
       seen.add(key);
       const m = masterData[r.ASIN];
-      out.push(m ? Object.assign(Object.create(null), r, m) : r);
+      if (!m) {
+        out.push(r);
+      } else {
+        // Merge master data but never overwrite a populated field with a blank/null value.
+        // This prevents the hardcoded ASIN_MASTER from blanking out category/mainCat that
+        // came from raw_data.json for ASINs that are only partially in the master.
+        const merged = Object.assign(Object.create(null), r);
+        for (const k of Object.keys(m)) {
+          const mv = m[k];
+          const rv = r[k];
+          const hasValue = mv !== null && mv !== undefined && mv !== "" && mv !== "nan";
+          if (hasValue || (rv === null || rv === undefined || rv === "" || rv === "nan")) {
+            merged[k] = mv;
+          }
+        }
+        out.push(merged);
+      }
     }
     return out;
+
   }, [dataRows, masterData]);
 
   const filtered = useMemo(() => {
     const q = deferredSearch.toLowerCase();
     return enriched.filter(r =>
-      (!brand  || r.Brand === brand) &&
-      (month === "All" || r.Month === month) &&
+      (brand.length === 0 || brand.includes(r.Brand)) &&
+      (month.length === 0 || month.includes(r.Month)) &&
       (!cat    || getCategoryBucket(r, masterData) === cat) &&
       (!q || (r.ASIN||"").toLowerCase().includes(q) || (typeof r.Title==="string"&&r.Title.toLowerCase().includes(q)) || (r.fbaSku||"").toLowerCase().includes(q) || (r.model||"").toLowerCase().includes(q))
     );
@@ -656,7 +840,7 @@ export default function Dashboard() {
 
   const comparePool = useMemo(() => {
     return enriched.filter((row) =>
-      (!brand || row.Brand === brand) &&
+      (brand.length === 0 || brand.includes(row.Brand)) &&
       (!deferredSearch || (row.ASIN || "").toLowerCase().includes(deferredSearch.toLowerCase()) || String(row.Title || "").toLowerCase().includes(deferredSearch.toLowerCase()))
     );
   }, [enriched, brand, deferredSearch]);
@@ -703,7 +887,7 @@ export default function Dashboard() {
   ]), [comparison]);
 
   const brandMonthTotals = useMemo(() => {
-    const sourceRows = enriched.filter((row) => !brand || row.Brand === brand);
+    const sourceRows = enriched.filter((row) => brand.length === 0 || brand.includes(row.Brand));
     const summarizeMonth = (targetMonth) => sourceRows
       .filter((row) => row.Month === targetMonth)
       .reduce((acc, row) => ({
@@ -786,6 +970,48 @@ export default function Dashboard() {
     return { ...metric, delta, growthPct };
   })), [compareTabM1, compareTabM2]);
 
+
+  // Remap metric fields per row based on active data mode.
+  // Defined here (before smartViewSortedRows) so it's available to all table renders.
+  const applyDataMode = React.useCallback((row) => {
+    if (dataMode === "all") return row; // combined — row already has TotalNetSalesValue = Rev1P+Rev3P
+    if (dataMode === "biz") {
+      // Amazon Sales mode — show only 3P revenue/units
+      const m = getMetrics(row, "biz");
+      return Object.assign(Object.create(null), row, {
+        NetUnits:            row.Units3P || 0,
+        TotalNetSalesValue:  row.Rev3P   || 0,
+        ACOS:                (row.TotalAdsSales||0) > 0 ? (row.TotalAdsSpend||0)/(row.TotalAdsSales||0) : 0,
+        TACOS:               ((row.Rev3P||0)+(row.TotalAdsSales||0)) > 0 ? (row.TotalAdsSpend||0)/((row.Rev3P||0)+(row.TotalAdsSales||0)) : 0,
+        OrganiSales:         Math.max(0,(row.Rev3P||0)-(row.TotalAdsSales||0)),
+        OrganicPct:          (row.Rev3P||0) > 0 ? Math.max(0,(row.Rev3P||0)-(row.TotalAdsSales||0))/(row.Rev3P||0) : 0,
+        ConversionPct:       (row.Sessions||0) > 0 ? (row.Units3P||0)/row.Sessions : 0,
+      });
+    }
+    const m = getMetrics(row, "p1");
+    return Object.assign(Object.create(null), row, {
+      Sessions:            null,
+      BuyboxPct:           null,
+      NetUnits:            m.units,
+      Units3P:             null,
+      Units1P:             m.units,
+      TotalNetSalesValue:  m.revenue,
+      Rev3P:               null,
+      Rev1P:               m.revenue,
+      TotalAdsSpend:       m.adSpend,
+      TotalAdsSales:       m.adSales,
+      ACOS:                m.acos,
+      TACOS:               m.tacos,
+      CAC:                 m.cac,
+      AmsOrders:           m.amsOrders,
+      Impressions:         m.impressions,
+      Clicks:              m.clicks,
+      OrganiSales:         null,
+      OrganicPct:          null,
+      ConversionPct:       null,
+    });
+  }, [dataMode]);
+
   const sorted = useMemo(() => {
     const col = COLS.find(c => c.key === sortKey);
     const isMaster = col?.master;
@@ -799,7 +1025,7 @@ export default function Dashboard() {
   const visibleRows = sorted;
   const totalPages = Math.max(1, Math.ceil(visibleRows.length / TABLE_PAGE_SIZE));
   const currentPage = Math.min(tablePage, totalPages);
-  const pagedRows = visibleRows.slice((currentPage - 1) * TABLE_PAGE_SIZE, currentPage * TABLE_PAGE_SIZE);
+  const pagedRows = visibleRows.slice((currentPage - 1) * TABLE_PAGE_SIZE, currentPage * TABLE_PAGE_SIZE).map(applyDataMode);
   const rankingMetricKey = useMemo(() => {
     const currentCol = COLS.find((column) => column.key === sortKey);
     return currentCol && currentCol.fmt !== "str" && currentCol.fmt !== "title" ? sortKey : "TotalNetSalesValue";
@@ -840,12 +1066,13 @@ export default function Dashboard() {
     () => SMART_VIEW_TABS.find((view) => view.key === smartViewTab) ?? SMART_VIEW_TABS[0],
     [smartViewTab]
   );
+
   const smartViewRows = useMemo(() => (
     enriched.filter((row) => {
       const q = deferredSearch.toLowerCase();
       return (
-        (!brand || row.Brand === brand) &&
-        (month === "All" || row.Month === month) &&
+        (brand.length === 0 || brand.includes(row.Brand)) &&
+        (month.length === 0 || month.includes(row.Month)) &&
         (!cat || getCategoryBucket(row, masterData) === cat) &&
         (!q || (row.ASIN || "").toLowerCase().includes(q) || String(row.Title || "").toLowerCase().includes(q) || (row.fbaSku || "").toLowerCase().includes(q) || (row.model || "").toLowerCase().includes(q)) &&
         activeSmartView.matches(row)
@@ -859,8 +1086,8 @@ export default function Dashboard() {
       const av = isMaster ? getMasterValue(a, sortKey) : (a[sortKey] ?? null);
       const bv = isMaster ? getMasterValue(b, sortKey) : (b[sortKey] ?? null);
       return compareValues(av, bv, sortDir);
-    });
-  }, [smartViewRows, sortKey, sortDir]);
+    }).map(applyDataMode);
+  }, [smartViewRows, sortKey, sortDir, dataMode]);
   const smartViewTotals = useMemo(() => smartViewRows.reduce((acc, row) => ({
     rows: acc.rows + 1,
     sales: acc.sales + (row.TotalNetSalesValue ?? 0),
@@ -871,34 +1098,40 @@ export default function Dashboard() {
     ? smartViewRows.reduce((sum, row) => sum + (row.BuyboxPct ?? 0), 0) / smartViewRows.length
     : 0;
 
-  // Totals
-  const totals = useMemo(() => filtered.reduce((acc, r) => ({
-    sessions: acc.sessions + (r.Sessions || 0),
-    units:    acc.units    + (r.NetUnits || 0),
-    sales:    acc.sales    + (r.TotalNetSalesValue || 0),
-    spend:    acc.spend    + (r.TotalAdsSpend || 0),
-    adsSales: acc.adsSales + (r.TotalAdsSales || 0),
-    orders:   acc.orders   + (r.AmsOrders || 0),
-  }), { sessions:0, units:0, sales:0, spend:0, adsSales:0, orders:0 }), [filtered]);
+  // Totals — recalculate based on active data mode
+  const totals = useMemo(() => filtered.reduce((acc, r) => {
+    const m = getMetrics(r, dataMode);
+    return {
+      sessions: acc.sessions + (m.sessions ?? 0),
+      units:    acc.units    + m.units,
+      sales:    acc.sales    + m.revenue,
+      spend:    acc.spend    + m.adSpend,
+      adsSales: acc.adsSales + m.adSales,
+      orders:   acc.orders   + m.amsOrders,
+    };
+  }, { sessions:0, units:0, sales:0, spend:0, adsSales:0, orders:0 }), [filtered, dataMode]);
 
   const avgAcos  = totals.adsSales > 0 ? totals.spend / totals.adsSales : 0;
-  const avgTacos = totals.sales    > 0 ? totals.spend / totals.sales    : 0;
-  const activeFilterCount = [brand, month !== "All" ? month : "", cat, debSearch].filter(Boolean).length;
+  const avgTacos = (totals.sales + totals.adsSales) > 0 ? totals.spend / (totals.sales + totals.adsSales) : 0;
+  const activeFilterCount = [brand.length > 0 ? "b" : "", month.length > 0 ? "m" : "", cat, debSearch].filter(Boolean).length;
 
   // Prev month totals for trend indicators
   const monthOrder = ["Jan","Feb","Mar"];
-  const prevMonth = month !== "All" ? monthOrder[monthOrder.indexOf(month) - 1] : null;
+  const prevMonth = month.length === 1 ? monthOrder[monthOrder.indexOf(month[0]) - 1] : null;
   const prevFiltered = useMemo(() => prevMonth ? enriched.filter(r =>
-    (!brand || r.Brand === brand) && r.Month === prevMonth && (!cat || getCategoryBucket(r, masterData) === cat)
+    (brand.length === 0 || brand.includes(r.Brand)) && r.Month === prevMonth && (!cat || getCategoryBucket(r, masterData) === cat)
   ) : [], [enriched, brand, prevMonth, cat, masterData]);
-  const prevTotals = useMemo(() => prevFiltered.reduce((acc, r) => ({
-    sessions: acc.sessions + r.Sessions,
-    units:    acc.units    + r.NetUnits,
-    sales:    acc.sales    + r.TotalNetSalesValue,
-    spend:    acc.spend    + r.TotalAdsSpend,
-    adsSales: acc.adsSales + r.TotalAdsSales,
-    orders:   acc.orders   + r.AmsOrders,
-  }), { sessions:0, units:0, sales:0, spend:0, adsSales:0, orders:0 }), [prevFiltered]);
+  const prevTotals = useMemo(() => prevFiltered.reduce((acc, r) => {
+    const m = getMetrics(r, dataMode);
+    return {
+      sessions: acc.sessions + (m.sessions ?? 0),
+      units:    acc.units    + m.units,
+      sales:    acc.sales    + m.revenue,
+      spend:    acc.spend    + m.adSpend,
+      adsSales: acc.adsSales + m.adSales,
+      orders:   acc.orders   + m.amsOrders,
+    };
+  }, { sessions:0, units:0, sales:0, spend:0, adsSales:0, orders:0 }), [prevFiltered, dataMode]);
   const trendPct = (curr, prev) => prev > 0 ? ((curr - prev) / prev) * 100 : null;
 
   const ACCENT = "#3B82F6";
@@ -1064,18 +1297,21 @@ export default function Dashboard() {
               style={{ background: search ? "#EFF6FF" : THEME.surface, border: search ? "1px solid #3B82F6" : `1px solid ${THEME.border}`, borderRadius:8, color:THEME.text, padding:"9px 14px 9px 34px", fontSize:12, width:260, outline:"none" }}
             />
           </div>
-          {[
-            { label:"Brand", val:brand, set:(value)=>{ setBrand(value); setTablePage(1); }, opts:[{v:"",l:"All Brands"},...brands.map((item)=>({v:item,l:item}))] },
-            { label:"Month", val:month, set:(value)=>{ setMonth(value); setTablePage(1); }, opts:months.map((item)=>({v:item,l:item})) },
-            { label:"Category", val:cat, set:(value)=>{ setCat(value); setTablePage(1); }, opts:[{v:"",l:"All Categories"},...cats.map((item)=>({v:item,l:item}))] },
-          ].map((filter) => (
-            <div key={filter.label} style={{ display:"flex", gap:6, alignItems:"center", padding:"7px 10px", borderRadius:8, background:THEME.surface, border:`1px solid ${THEME.border}` }}>
-              <span style={{ fontSize:10, color:THEME.textFaint, fontFamily:"'DM Mono',monospace", letterSpacing:0.8, textTransform:"uppercase", fontWeight:600 }}>{filter.label}</span>
-              <select value={filter.val} onChange={(e)=>filter.set(e.target.value)} style={{ background:"transparent", border:"none", color:THEME.text, padding:"1px 20px 1px 2px", fontSize:12, cursor:"pointer", appearance:"none", outline:"none" }}>
-                {filter.opts.map((option)=><option key={option.v} value={option.v}>{option.l}</option>)}
-              </select>
-            </div>
-          ))}
+          <MultiSelectFilter label="Brand" selected={brand} setSelected={(v)=>{setBrand(v);setTablePage(1);}} opts={brands.map(b=>({v:b,l:b}))} isActive={brand.length>0} />
+          <MultiSelectFilter label="Month" selected={month} setSelected={(v)=>{setMonth(v);setTablePage(1);}} opts={[{v:"Jan",l:"Jan"},{v:"Feb",l:"Feb"},{v:"Mar",l:"Mar"}]} isActive={month.length>0} />
+          <MultiSelectFilter label="Category" selected={cat?[cat]:[]} setSelected={(v)=>{setCat(v.length?v[v.length-1]:"");setTablePage(1);}} opts={cats.map(c=>({v:c,l:c}))} isActive={!!cat} />
+          {/* Data Mode Toggle */}
+          <div style={{ display:"flex", gap:0, borderRadius:8, border:`1px solid ${THEME.border}`, overflow:"hidden", flexShrink:0 }}>
+            {[{v:"biz",l:"Amazon Sales"},{v:"p1",l:"1P Sales"}].map(({v,l}) => (
+              <button key={v} onClick={() => setDataMode(prev => prev === v ? "all" : v)} style={{
+                padding:"7px 13px", border:"none", fontSize:11, fontWeight:700,
+                cursor:"pointer", transition:"all 0.15s", whiteSpace:"nowrap",
+                background: dataMode===v ? "#2563EB" : THEME.surface,
+                color: dataMode===v ? "#fff" : THEME.textSoft,
+                borderRight: v==="biz" ? `1px solid ${THEME.border}` : "none",
+              }}>{l}</button>
+            ))}
+          </div>
         </div>
 
         <div style={{ padding:"18px 24px 12px", display:"grid", gridTemplateColumns:"repeat(4, minmax(0, 1fr))", gap:12 }}>
@@ -1133,7 +1369,7 @@ export default function Dashboard() {
                   {smartViewSortedRows.map((row, index) => {
                     const rowBackground = index % 2 === 0 ? THEME.surface : THEME.panelBg;
                     return (
-                      <tr key={`${row.ASIN}-${row.Month}-${index}`} style={{ borderBottom:"1px solid #F1F5F9", background:rowBackground }}>
+                      <tr key={`${row.Brand}-${row.ASIN}-${row.Month}`} style={{ borderBottom:"1px solid #F1F5F9", background:rowBackground }}>
                         {COLS.map((col) => {
                           const v = col.master ? getMasterValue(row, col.key) : row[col.key];
                           const disp = fmtCell(row, col);
@@ -1778,9 +2014,13 @@ export default function Dashboard() {
 
   // ── MODEL DETAIL PAGE ────────────────────────────────────────────────────
   if (modelTabKey && modelTabMeta) {
-    const allMonths = ["Jan","Feb","Mar"];
+    // Auto-derive available months from actual data (works for any number of months)
+    const allMonths = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const availableMonths = allMonths.filter(m => modelTabRows.some(r => r.Month === m));
+    const selectedMonth = selectedModelMonth;
+    const setSelectedMonth = setSelectedModelMonth;
     // One aggregated row per month (model may have multiple ASINs per month)
-    const byMonth = allMonths.map(mon => {
+    const byMonth = availableMonths.map(mon => {
       const rows = modelTabRows.filter(r => r.Month === mon);
       if (!rows.length) return null;
       const sum = (key) => rows.reduce((acc, r) => acc + (r[key] || 0), 0);
@@ -1814,6 +2054,10 @@ export default function Dashboard() {
       };
     }).filter(Boolean);
 
+    // Apply month filter for display
+    const filteredByMonth = selectedMonth === "All" ? byMonth : byMonth.filter(r => r.Month === selectedMonth);
+    const filteredModelRows = selectedMonth === "All" ? modelTabRows : modelTabRows.filter(r => r.Month === selectedMonth);
+
     // All unique ASINs for this model
     const modelAsins = [...new Set(modelTabRows.map(r => r.ASIN))];
 
@@ -1832,18 +2076,18 @@ export default function Dashboard() {
     });
 
     // Summary totals across all months
-    const totAdSpend  = byMonth.reduce((a,r) => a + r.TotalAdsSpend, 0);
-    const totAdSales  = byMonth.reduce((a,r) => a + r.TotalAdsSales, 0);
-    const totNetSales = byMonth.reduce((a,r) => a + r.TotalNetSalesValue, 0);
-    const totUnits    = byMonth.reduce((a,r) => a + r.NetUnits, 0);
-    const totOrders   = byMonth.reduce((a,r) => a + r.AmsOrders, 0);
-    const totClicks   = byMonth.reduce((a,r) => a + r.Clicks, 0);
-    const totImpr     = byMonth.reduce((a,r) => a + r.Impressions, 0);
-    const totSessions = byMonth.reduce((a,r) => a + r.Sessions, 0);
+    const totAdSpend  = filteredByMonth.reduce((a,r) => a + r.TotalAdsSpend, 0);
+    const totAdSales  = filteredByMonth.reduce((a,r) => a + r.TotalAdsSales, 0);
+    const totNetSales = filteredByMonth.reduce((a,r) => a + r.TotalNetSalesValue, 0);
+    const totUnits    = filteredByMonth.reduce((a,r) => a + r.NetUnits, 0);
+    const totOrders   = filteredByMonth.reduce((a,r) => a + r.AmsOrders, 0);
+    const totClicks   = filteredByMonth.reduce((a,r) => a + r.Clicks, 0);
+    const totImpr     = filteredByMonth.reduce((a,r) => a + r.Impressions, 0);
+    const totSessions = filteredByMonth.reduce((a,r) => a + r.Sessions, 0);
     const overallACOS  = totAdSales  > 0 ? totAdSpend / totAdSales  : 0;
     const overallTACOS = (totNetSales + totAdSales) > 0 ? totAdSpend / (totNetSales + totAdSales) : 0;
     const overallCAC   = totOrders   > 0 ? totAdSpend / totOrders   : 0;
-    const overallBB    = byMonth.reduce((a,r,_,arr) => a + r.BuyboxPct / arr.length, 0);
+    const overallBB    = filteredByMonth.reduce((a,r,_,arr) => a + r.BuyboxPct / arr.length, 0);
 
     return (
       <div style={{ fontFamily:"'Inter','Segoe UI',sans-serif", background:`linear-gradient(180deg,${THEME.pageBg} 0%,${THEME.shellBg} 52%,${THEME.panelBg} 100%)`, minHeight:"100vh", color:THEME.text }}>
@@ -1860,12 +2104,29 @@ export default function Dashboard() {
                 {modelTabMeta.Brand} · {modelTabMeta.mainCat || modelTabMeta.category || "—"} · {modelAsins.length} ASIN{modelAsins.length !== 1 ? "s" : ""}
               </div>
             </div>
-            <button
-              onClick={() => { if (window.opener) window.close(); else window.history.back(); }}
-              style={{ padding:"10px 18px", borderRadius:999, background:"#2563EB", border:"none", color:"#fff", fontSize:12, fontWeight:700, cursor:"pointer" }}
-            >
-              {window.opener ? "Close Tab" : "← Back"}
-            </button>
+            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+              {/* Month toggle pills */}
+              <div style={{ display:"flex", gap:4, background:"#1E293B", borderRadius:10, padding:"4px" }}>
+                {["All", ...availableMonths].map(m => (
+                  <button
+                    key={m}
+                    onClick={() => setSelectedMonth(m)}
+                    style={{
+                      padding:"6px 14px", borderRadius:7, border:"none", fontSize:11, fontWeight:700,
+                      cursor:"pointer", transition:"all 0.15s",
+                      background: selectedMonth === m ? "#2563EB" : "transparent",
+                      color: selectedMonth === m ? "#fff" : "#94A3B8",
+                    }}
+                  >{m}</button>
+                ))}
+              </div>
+              <button
+                onClick={() => { if (window.opener) window.close(); else window.history.back(); }}
+                style={{ padding:"10px 18px", borderRadius:999, background:"#2563EB", border:"none", color:"#fff", fontSize:12, fontWeight:700, cursor:"pointer" }}
+              >
+                {window.opener ? "Close Tab" : "← Back"}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -1910,7 +2171,7 @@ export default function Dashboard() {
           {/* ── Monthly Summary Breakdown ── */}
           <div style={{ background:"#fff", border:"1px solid #D8E1EC", borderRadius:16, boxShadow:"0 10px 24px rgba(15,23,42,0.05)", marginBottom:20, overflow:"hidden" }}>
             <div style={{ padding:"12px 18px", background:`linear-gradient(90deg,#EEF2FF,transparent)`, borderBottom:"1px solid #E2E8F0", fontSize:10, fontFamily:"'DM Mono',monospace", letterSpacing:0.9, textTransform:"uppercase", color:"#334155", fontWeight:700 }}>
-              Monthly Breakdown — {modelTabKey}
+              Monthly Breakdown — {modelTabKey}{selectedMonth !== "All" ? ` (${selectedMonth})` : ""}
             </div>
             <div style={{ overflowX:"auto" }}>
               <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
@@ -1922,7 +2183,7 @@ export default function Dashboard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {byMonth.map((r, i) => (
+                  {filteredByMonth.map((r, i) => (
                     <tr key={r.Month} style={{ background: i%2===0 ? "#fff" : "#F8FAFC", borderBottom:"1px solid #F1F5F9" }}>
                       <td style={{ padding:"8px 12px", fontWeight:700, fontFamily:"'DM Mono',monospace", fontSize:12, color:"#1E293B" }}>{r.Month} 2026</td>
                       <td style={{ padding:"8px 12px", textAlign:"left", color:"#64748B" }}>{r.asinCount}</td>
@@ -1942,7 +2203,8 @@ export default function Dashboard() {
                       <td style={{ padding:"8px 12px", textAlign:"right", color:"#10B981" }}>{(r.OrganicPct*100).toFixed(1)}%</td>
                     </tr>
                   ))}
-                  {/* Totals row */}
+                  {/* Totals row — show aggregate of currently visible months */}
+                  {filteredByMonth.length > 1 && (
                   <tr style={{ background:"#EEF2FF", borderTop:"2px solid #C7D2FE", fontWeight:700 }}>
                     <td style={{ padding:"9px 12px", fontFamily:"'DM Mono',monospace", fontSize:12, color:"#1E293B" }}>TOTAL</td>
                     <td style={{ padding:"9px 12px", color:"#64748B" }}>—</td>
@@ -1961,6 +2223,7 @@ export default function Dashboard() {
                     <td style={{ padding:"9px 12px", textAlign:"right" }}>—</td>
                     <td style={{ padding:"9px 12px", textAlign:"right", color:"#10B981" }}>—</td>
                   </tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -1969,7 +2232,7 @@ export default function Dashboard() {
           {/* ── Per-ASIN Detail Table ── */}
           <div style={{ background:"#fff", border:"1px solid #D8E1EC", borderRadius:16, boxShadow:"0 10px 24px rgba(15,23,42,0.05)", overflow:"hidden" }}>
             <div style={{ padding:"12px 18px", background:`linear-gradient(90deg,#F0FDF4,transparent)`, borderBottom:"1px solid #E2E8F0", fontSize:10, fontFamily:"'DM Mono',monospace", letterSpacing:0.9, textTransform:"uppercase", color:"#334155", fontWeight:700 }}>
-              All ASINs under {modelTabKey} — Full Metrics
+              All ASINs under {modelTabKey}{selectedMonth !== "All" ? ` — ${selectedMonth}` : ""} — Full Metrics
             </div>
             <div style={{ overflowX:"auto" }}>
               <table style={{ width:"100%", borderCollapse:"collapse", fontSize:11.5 }}>
@@ -1981,8 +2244,8 @@ export default function Dashboard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {modelTabRows.map((r, i) => (
-                    <tr key={`${r.ASIN}-${r.Month}-${i}`} style={{ background: i%2===0 ? "#fff" : "#F8FAFC", borderBottom:"1px solid #F1F5F9" }}>
+                  {filteredModelRows.map((r, i) => (
+                    <tr key={`${r.Brand}-${r.ASIN}-${r.Month}`} style={{ background: i%2===0 ? "#fff" : "#F8FAFC", borderBottom:"1px solid #F1F5F9" }}>
                       <td style={{ padding:"6px 12px", fontFamily:"'DM Mono',monospace", fontSize:11, fontWeight:800, color:"#1D4ED8" }}>
                         <a href={getAmazonProductUrl(r.ASIN)} target="_blank" rel="noreferrer" style={{ color:"#1D4ED8", textDecoration:"underline", textUnderlineOffset:"2px" }}>{r.ASIN}</a>
                       </td>
@@ -2242,7 +2505,7 @@ export default function Dashboard() {
       const top10 = [...filtered].sort((a,b)=>(b.TotalNetSalesValue||0)-(a.TotalNetSalesValue||0)).slice(0,10).map(r=>
         `${r.ASIN}(${r.Brand},${r.Month}): Sales=₹${((r.TotalNetSalesValue||0)/1000).toFixed(0)}K, Units=${r.NetUnits||0}, ACOS=${((r.ACOS||0)*100).toFixed(1)}%, Buybox=${((r.BuyboxPct||0)*100).toFixed(1)}%, Sessions=${r.Sessions||0}`
       ).join("\n");
-      return `You are an expert Amazon performance analyst AI for BrandIQ Hub dashboard.\n\nBRAND TOTALS:\n${brandTotals}\n\nTOP 10 ASINs (filter: Brand=${brand||"All"}, Month=${month}):\n${top10}\n\nOVERALL: Sessions=${totals.sessions.toLocaleString()}, Units=${totals.units.toLocaleString()}, Sales=₹${(totals.sales/10000000).toFixed(2)}Cr, Spend=₹${(totals.spend/100000).toFixed(1)}L, AvgACOS=${(avgAcos*100).toFixed(1)}%, AvgTACOS=${(avgTacos*100).toFixed(1)}%\n\nBe concise and business-focused. Use bullet points and bold key numbers with ₹ signs.`;
+      return `You are an expert Amazon performance analyst AI for BrandIQ Hub dashboard.\n\nBRAND TOTALS:\n${brandTotals}\n\nTOP 10 ASINs (filter: Brand=${brand||"All"}, Month=${month.length===0?"All":month.join(",")}):\n${top10}\n\nOVERALL: Sessions=${totals.sessions.toLocaleString()}, Units=${totals.units.toLocaleString()}, Sales=₹${(totals.sales/10000000).toFixed(2)}Cr, Spend=₹${(totals.spend/100000).toFixed(1)}L, AvgACOS=${(avgAcos*100).toFixed(1)}%, AvgTACOS=${(avgTacos*100).toFixed(1)}%\n\nBe concise and business-focused. Use bullet points and bold key numbers with ₹ signs.`;
     } catch(err) {
       console.error("buildAiContext error:", err);
       return "You are an expert Amazon performance analyst AI for BrandIQ Hub dashboard. Data could not be loaded.";
@@ -2371,28 +2634,28 @@ export default function Dashboard() {
       {/* Filters */}
       <div style={{ background: THEME.shellBg, borderBottom: `1px solid ${THEME.border}`, padding: "12px 24px", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
         <div style={{ position: "relative", flex: "0 0 auto" }}>
-          <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: THEME.textFaint, fontSize: 13 }}>⌕</span>
+          <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: THEME.textFaint, fontSize: 13 }}>{isSearchPending ? "⟳" : "⌕"}</span>
           <input
             placeholder="Search ASIN, SKU, model, product…"
             value={search} onChange={onSearch}
             style={{ background: search?"#EFF6FF":THEME.surface, border: search?"1px solid #3B82F6":`1px solid ${THEME.border}`, borderRadius: 8, color: THEME.text, padding: "9px 14px 9px 34px", fontSize: 12, width: 260, outline: "none", transition:"all 0.15s" }}
           />
         </div>
-        {[
-          { label:"Brand", val:brand, set:(value)=>{ setBrand(value); setCompareAsin(""); setTablePage(1); }, opts:[{v:"",l:"All Brands"},...brands.map(b=>({v:b,l:b}))] },
-          { label:"Month", val:month, set:(v)=>{ setMonth(v); setTablePage(1); }, opts:months.map(m=>({v:m,l:m})) },
-          { label:"Category", val:cat, set:(value)=>{ setCat(value); setCompareAsin(""); setTablePage(1); }, opts:[{v:"",l:"All Categories"},...cats.map(c=>({v:c,l:c}))] },
-        ].map(f=>(
-          <div key={f.label} style={{ display:"flex", gap:6, alignItems:"center", padding:"7px 10px", borderRadius:8,
-            background: f.val && f.val !== "All" ? "#EFF6FF" : THEME.surface,
-            border: f.val && f.val !== "All" ? "1px solid #3B82F6" : `1px solid ${THEME.border}`,
-            transition:"all 0.15s" }}>
-            <span style={{ fontSize:10, color: f.val && f.val !== "All" ? "#2563EB" : THEME.textFaint, fontFamily:"'DM Mono',monospace", letterSpacing:0.8, textTransform:"uppercase", whiteSpace:"nowrap", fontWeight:600 }}>{f.label}</span>
-            <select value={f.val} onChange={e=>{f.set(e.target.value);}} style={{ background:"transparent", border:"none", color: THEME.text, padding:"1px 20px 1px 2px", fontSize:12, cursor:"pointer", appearance:"none", outline:"none", backgroundImage:"url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%2394A3B8' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E\")", backgroundRepeat:"no-repeat", backgroundPosition:"right 4px center" }}>
-              {f.opts.map(o=><option key={o.v} value={o.v}>{o.l}</option>)}
-            </select>
-          </div>
-        ))}
+        <MultiSelectFilter label="Brand" selected={brand} setSelected={(v)=>{setBrand(v);setCompareAsin("");setTablePage(1);}} opts={brands.map(b=>({v:b,l:b}))} isActive={brand.length>0} />
+        <MultiSelectFilter label="Month" selected={month} setSelected={(v)=>{setMonth(v);setTablePage(1);}} opts={[{v:"Jan",l:"Jan"},{v:"Feb",l:"Feb"},{v:"Mar",l:"Mar"}]} isActive={month.length>0} />
+        <MultiSelectFilter label="Category" selected={cat?[cat]:[]} setSelected={(v)=>{setCat(v.length?v[v.length-1]:"");setCompareAsin("");setTablePage(1);}} opts={cats.map(c=>({v:c,l:c}))} isActive={!!cat} />
+        {/* Data Mode Toggle */}
+        <div style={{ display:"flex", gap:0, borderRadius:8, border:`1px solid ${THEME.border}`, overflow:"hidden", flexShrink:0 }}>
+          {[{v:"biz",l:"Amazon Sales"},{v:"p1",l:"1P Sales"}].map(({v,l}) => (
+            <button key={v} onClick={() => setDataMode(prev => prev === v ? "all" : v)} style={{
+              padding:"7px 13px", border:"none", fontSize:11, fontWeight:700,
+              cursor:"pointer", transition:"all 0.15s", whiteSpace:"nowrap",
+              background: dataMode===v ? "#2563EB" : THEME.surface,
+              color: dataMode===v ? "#fff" : THEME.textSoft,
+              borderRight: v==="biz" ? `1px solid ${THEME.border}` : "none",
+            }}>{l}</button>
+          ))}
+        </div>
         <div style={{ marginLeft:"auto", display:"flex", gap:8, alignItems:"center" }}>
           <span style={{ fontSize:11, color: activeFilterCount > 0 ? "#2563EB" : THEME.textFaint, fontFamily:"'DM Mono',monospace" }}>
             {activeFilterCount > 0 ? `${activeFilterCount} filter${activeFilterCount>1?"s":""} active` : `${filtered.length} rows`}
@@ -2436,9 +2699,9 @@ export default function Dashboard() {
 
       {/* KPI Strip */}
       <div style={{ padding:"12px 24px", display:"flex", gap:10, overflowX:"auto", flexWrap:"nowrap", WebkitOverflowScrolling:"touch", background:THEME.surface, borderBottom:`1px solid ${THEME.surfaceSoft}` }}>
-        <KpiCard label="Sessions"   value={totals.sessions.toLocaleString("en-IN")}    accent="#38BDF8" trend={trendPct(totals.sessions, prevTotals.sessions)} />
+        <KpiCard label="Sessions" value={dataMode === "p1" ? "N/A" : totals.sessions.toLocaleString("en-IN")} accent="#38BDF8" trend={dataMode === "p1" ? null : trendPct(totals.sessions, prevTotals.sessions)} />
         <KpiCard label="Net Units"  value={totals.units.toLocaleString("en-IN")}        accent="#34D399" trend={trendPct(totals.units, prevTotals.units)} />
-        <KpiCard label="Net Sales"  value={inr(totals.sales)}   accent="#A78BFA" trend={trendPct(totals.sales, prevTotals.sales)} />
+        <KpiCard label={dataMode === "p1" ? "1P Sales" : dataMode === "biz" ? "Amazon Sales" : "Net Sales"}  value={inr(totals.sales)}   accent="#A78BFA" trend={trendPct(totals.sales, prevTotals.sales)} />
         <KpiCard label="Ad Spend"  value={inr(totals.spend)}   accent="#FBBF24" trend={trendPct(totals.spend, prevTotals.spend)} />
         <KpiCard label="Ad Sales"  value={inr(totals.adsSales)} accent="#F9A8D4" trend={trendPct(totals.adsSales, prevTotals.adsSales)} />
         <KpiCard label="AMS Orders" value={totals.orders.toLocaleString("en-IN")}       accent="#FB923C" trend={trendPct(totals.orders, prevTotals.orders)} />
@@ -2448,7 +2711,7 @@ export default function Dashboard() {
 
       {/* Table */}
       <div style={{ padding:"0 24px 32px", overflowX:"auto" }}>
-        <div style={{ borderRadius:12, border:`1px solid ${THEME.border}`, overflow:"hidden", minWidth:1800, background:THEME.surface, boxShadow:"0 4px 16px rgba(15,23,42,0.04)" }}>
+        <div style={{ borderRadius:12, border:`1px solid ${THEME.border}`, overflow:"hidden", minWidth:1800, background:THEME.surface, boxShadow:"0 4px 16px rgba(15,23,42,0.04)", opacity: isSearchPending ? 0.6 : 1, transition:"opacity 0.15s" }}>
           <div ref={tableScrollerRef} style={{ overflow:"auto", maxHeight:"calc(100vh - 240px)" }}>
           <table style={{ width:"100%", borderCollapse:"collapse", fontSize:11.5 }}>
             <thead>
@@ -2478,7 +2741,7 @@ export default function Dashboard() {
                 const i = (currentPage - 1) * TABLE_PAGE_SIZE + index;
                 const rowBackground = i % 2 === 0 ? THEME.surface : THEME.panelBg;
                 return (
-                  <tr key={i} style={{ borderBottom:"1px solid #F1F5F9", background: rowBackground }}
+                  <tr key={`${row.Brand}-${row.ASIN}-${row.Month}`} style={{ borderBottom:"1px solid #F1F5F9", background: rowBackground }}
                     onMouseEnter={e=>{
                       e.currentTarget.style.background=THEME.hover;
                       e.currentTarget.querySelectorAll("[data-sticky='true']").forEach((cell) => {
@@ -2569,7 +2832,7 @@ export default function Dashboard() {
                         Try another brand, month or search term to find results.
                       </div>
                       <button
-                        onClick={() => { setBrand(""); setMonth("All"); setSearch(""); setDebSearch(""); }}
+                        onClick={() => { setBrand([]); setMonth([]); setSearch(""); setDebSearch(""); }}
                         style={{ background:"linear-gradient(135deg,#2563EB,#38BDF8)", border:"none", borderRadius:999, color:"#EFF6FF", padding:"10px 16px", fontSize:12, fontWeight:700, cursor:"pointer" }}
                       >
                         Reset filters

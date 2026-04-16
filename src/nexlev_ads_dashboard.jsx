@@ -668,7 +668,7 @@ export default function Dashboard() {
   const [masterData] = useState(MASTER_DATA);
   const [brand, setBrand]   = useState([]);
   const [month, setMonth]   = useState([]);
-  const [cat, setCat]       = useState("");
+  const [cat, setCat]       = useState([]); // multi-select array
   const [dataMode, setDataMode] = useState("all"); // "all" = combined, "biz" = Amazon Sales (3P), "p1" = 1P Sales
   const [compareAsin, setCompareAsin] = useState("");
   const [compareM1, setCompareM1] = useState("Jan");
@@ -833,7 +833,7 @@ export default function Dashboard() {
     return enriched.filter(r =>
       (brand.length === 0 || brand.includes(r.Brand)) &&
       (month.length === 0 || month.includes(r.Month)) &&
-      (!cat    || getCategoryBucket(r, masterData) === cat) &&
+      (cat.length === 0 || cat.includes(getCategoryBucket(r, masterData))) &&
       (!q || (r.ASIN||"").toLowerCase().includes(q) || (typeof r.Title==="string"&&r.Title.toLowerCase().includes(q)) || (r.fbaSku||"").toLowerCase().includes(q) || (r.model||"").toLowerCase().includes(q))
     );
   }, [enriched, brand, month, cat, deferredSearch, masterData]);
@@ -1073,7 +1073,7 @@ export default function Dashboard() {
       return (
         (brand.length === 0 || brand.includes(row.Brand)) &&
         (month.length === 0 || month.includes(row.Month)) &&
-        (!cat || getCategoryBucket(row, masterData) === cat) &&
+        (cat.length === 0 || cat.includes(getCategoryBucket(row, masterData))) &&
         (!q || (row.ASIN || "").toLowerCase().includes(q) || String(row.Title || "").toLowerCase().includes(q) || (row.fbaSku || "").toLowerCase().includes(q) || (row.model || "").toLowerCase().includes(q)) &&
         activeSmartView.matches(row)
       );
@@ -1113,13 +1113,13 @@ export default function Dashboard() {
 
   const avgAcos  = totals.adsSales > 0 ? totals.spend / totals.adsSales : 0;
   const avgTacos = (totals.sales + totals.adsSales) > 0 ? totals.spend / (totals.sales + totals.adsSales) : 0;
-  const activeFilterCount = [brand.length > 0 ? "b" : "", month.length > 0 ? "m" : "", cat, debSearch].filter(Boolean).length;
+  const activeFilterCount = [brand.length > 0 ? "b" : "", month.length > 0 ? "m" : "", cat.length > 0 ? "c" : "", debSearch].filter(Boolean).length;
 
   // Prev month totals for trend indicators
   const monthOrder = ["Jan","Feb","Mar"];
   const prevMonth = month.length === 1 ? monthOrder[monthOrder.indexOf(month[0]) - 1] : null;
   const prevFiltered = useMemo(() => prevMonth ? enriched.filter(r =>
-    (brand.length === 0 || brand.includes(r.Brand)) && r.Month === prevMonth && (!cat || getCategoryBucket(r, masterData) === cat)
+    (brand.length === 0 || brand.includes(r.Brand)) && r.Month === prevMonth && (cat.length === 0 || cat.includes(getCategoryBucket(r, masterData)))
   ) : [], [enriched, brand, prevMonth, cat, masterData]);
   const prevTotals = useMemo(() => prevFiltered.reduce((acc, r) => {
     const m = getMetrics(r, dataMode);
@@ -1299,7 +1299,7 @@ export default function Dashboard() {
           </div>
           <MultiSelectFilter label="Brand" selected={brand} setSelected={(v)=>{setBrand(v);setTablePage(1);}} opts={brands.map(b=>({v:b,l:b}))} isActive={brand.length>0} />
           <MultiSelectFilter label="Month" selected={month} setSelected={(v)=>{setMonth(v);setTablePage(1);}} opts={[{v:"Jan",l:"Jan"},{v:"Feb",l:"Feb"},{v:"Mar",l:"Mar"}]} isActive={month.length>0} />
-          <MultiSelectFilter label="Category" selected={cat?[cat]:[]} setSelected={(v)=>{setCat(v.length?v[v.length-1]:"");setTablePage(1);}} opts={cats.map(c=>({v:c,l:c}))} isActive={!!cat} />
+          <MultiSelectFilter label="Category" selected={cat} setSelected={(v)=>{setCat(v);setTablePage(1);}} opts={cats.map(c=>({v:c,l:c}))} isActive={cat.length>0} />
           {/* Data Mode Toggle */}
           <div style={{ display:"flex", gap:0, borderRadius:8, border:`1px solid ${THEME.border}`, overflow:"hidden", flexShrink:0 }}>
             {[{v:"biz",l:"Amazon Sales"},{v:"p1",l:"1P Sales"}].map(({v,l}) => (
@@ -2643,7 +2643,7 @@ export default function Dashboard() {
         </div>
         <MultiSelectFilter label="Brand" selected={brand} setSelected={(v)=>{setBrand(v);setCompareAsin("");setTablePage(1);}} opts={brands.map(b=>({v:b,l:b}))} isActive={brand.length>0} />
         <MultiSelectFilter label="Month" selected={month} setSelected={(v)=>{setMonth(v);setTablePage(1);}} opts={[{v:"Jan",l:"Jan"},{v:"Feb",l:"Feb"},{v:"Mar",l:"Mar"}]} isActive={month.length>0} />
-        <MultiSelectFilter label="Category" selected={cat?[cat]:[]} setSelected={(v)=>{setCat(v.length?v[v.length-1]:"");setCompareAsin("");setTablePage(1);}} opts={cats.map(c=>({v:c,l:c}))} isActive={!!cat} />
+        <MultiSelectFilter label="Category" selected={cat} setSelected={(v)=>{setCat(v);setCompareAsin("");setTablePage(1);}} opts={cats.map(c=>({v:c,l:c}))} isActive={cat.length>0} />
         {/* Data Mode Toggle */}
         <div style={{ display:"flex", gap:0, borderRadius:8, border:`1px solid ${THEME.border}`, overflow:"hidden", flexShrink:0 }}>
           {[{v:"biz",l:"Amazon Sales"},{v:"p1",l:"1P Sales"}].map(({v,l}) => (

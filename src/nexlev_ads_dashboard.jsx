@@ -2522,7 +2522,7 @@ export default function Dashboard() {
     try {
       const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
         method:"POST",
-        headers:{"Content-Type":"application/json","Authorization":"Bearer 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"},
+        headers:{"Content-Type":"application/json","Authorization":"Bearer OPENROUTER_API_KEY_REMOVED"},
         body:JSON.stringify({ model:"meta-llama/llama-3.1-8b-instruct:free", max_tokens:1000, messages:[{role:"system",content:buildAiContext()},...newMessages] }),
       });
       const data = await res.json();

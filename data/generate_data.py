@@ -234,8 +234,10 @@ for brand_name, cfg in CONFIGS.items():
             ad_sales  = ads.get("sales", 0)
             rev_3p    = biz.get("rev_3p", 0)
             rev_1p    = p1.get("rev_1p", 0)
+            # TotalNetSalesValue = total revenue (Amazon's "Ordered Product Sales" already
+            # includes ad-attributed sales — ad_sales is a SUBSET of rev_3p, not added to it).
+            # For 1P: Rev1P is separate revenue stream; combined mode shows both together.
             net_sales = rev_3p + rev_1p
-            net_sales_total = net_sales + ad_sales
             impr      = ads.get("impr", 0)
             clicks    = ads.get("clicks", 0)
             ams_orders= ads.get("orders", 0)
@@ -243,8 +245,10 @@ for brand_name, cfg in CONFIGS.items():
             units_1p  = p1.get("units_1p", 0)
             sessions  = biz.get("sessions", 0)
 
+            # ACOS  = Ad Spend / Ad Sales           (efficiency of ads only)
+            # TACOS = Ad Spend / Total Net Sales    (ad spend vs ALL sales, ad + organic)
             acos  = round(ad_spend/ad_sales, 4) if ad_sales > 0 else 0
-            tacos = round(ad_spend/net_sales_total, 4) if net_sales_total > 0 else 0
+            tacos = round(ad_spend/net_sales, 4) if net_sales > 0 else 0
             cac   = round(ad_spend/ams_orders, 2) if ams_orders > 0 else 0
             cvr   = round((units_3p+units_1p)/sessions, 4) if sessions > 0 else 0
             org_sales = max(0, net_sales - ad_sales)

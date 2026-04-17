@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useCallback, useTransition, useRef, useEffect, useDeferredValue } from "react";
 import RAW_DATA from "./raw_data.json";
+import BSR_RAW from "./bsr_data.json";
 
 // ── ASIN Master: FBA SKU · Model · Category · DP · NLC ──────────────────────
 const ASIN_MASTER = {
@@ -591,7 +592,7 @@ function getMetrics(row, mode) {
     const units = row.NetUnits || 0;
     const spend = row.TotalAdsSpend || 0;
     const adSales = row.TotalAdsSales || 0;
-    const tacos = (rev + adSales) > 0 ? spend / (rev + adSales) : 0;
+    const tacos = rev > 0 ? spend / rev : 0;
     const acos  = adSales > 0 ? spend / adSales : 0;
     const cac   = (row.AmsOrders || 0) > 0 ? spend / row.AmsOrders : 0;
     const orgSales = Math.max(0, rev - adSales);
@@ -612,7 +613,7 @@ function getMetrics(row, mode) {
     const units = row.Units1P || 0;
     const spend = row.TotalAdsSpend || 0;
     const adSales = row.TotalAdsSales || 0;
-    const tacos = (rev + adSales) > 0 ? spend / (rev + adSales) : 0;
+    const tacos = rev > 0 ? spend / rev : 0;
     const acos  = adSales > 0 ? spend / adSales : 0;
     const cac   = (row.AmsOrders || 0) > 0 ? spend / row.AmsOrders : 0;
     return {
@@ -638,7 +639,7 @@ function getMetrics(row, mode) {
   const units = row.Units3P || 0;
   const spend = row.TotalAdsSpend || 0;
   const adSales = row.TotalAdsSales || 0;
-  const tacos = (rev + adSales) > 0 ? spend / (rev + adSales) : 0;
+  const tacos = rev > 0 ? spend / rev : 0;
   const acos  = adSales > 0 ? spend / adSales : 0;
   const cac   = (row.AmsOrders || 0) > 0 ? spend / row.AmsOrders : 0;
   const orgSales = Math.max(0, rev - adSales);
@@ -661,6 +662,1363 @@ function getMetrics(row, mode) {
     orgPct,
     cvr,
   };
+}
+
+// ── BSR Tracker Page ─────────────────────────────────────────────────────────
+function getBsrTier(bsr) {
+  if (!bsr) return { label:"No data", color:"#9CA3AF", bg:"#F3F4F6", emoji:"—" };
+  if (bsr <= 1000)   return { label:"Top 1K",   color:"#059669", bg:"#D1FAE5", emoji:"🏆" };
+  if (bsr <= 5000)   return { label:"Top 5K",   color:"#0284C7", bg:"#DBEAFE", emoji:"🥇" };
+  if (bsr <= 10000)  return { label:"Top 10K",  color:"#7C3AED", bg:"#EDE9FE", emoji:"🥈" };
+  if (bsr <= 50000)  return { label:"Top 50K",  color:"#D97706", bg:"#FEF3C7", emoji:"🥉" };
+  if (bsr <= 100000) return { label:"Top 100K", color:"#EA580C", bg:"#FFEDD5", emoji:"📈" };
+  return               { label:"100K+",         color:"#DC2626", bg:"#FEE2E2", emoji:"📉" };
+}
+
+const BRAND_META = {
+  "Audio Array":    { accent:"#7C3AED", light:"#F5F3FF", text:"#6D28D9" },
+  "Nexlev":         { accent:"#2563EB", light:"#EFF6FF", text:"#1D4ED8" },
+  "nexlev":         { accent:"#2563EB", light:"#EFF6FF", text:"#1D4ED8" },
+  "TONOR":          { accent:"#059669", light:"#ECFDF5", text:"#047857" },
+  "Tonor":          { accent:"#059669", light:"#ECFDF5", text:"#047857" },
+  "White Mulberry": { accent:"#D97706", light:"#FFFBEB", text:"#B45309" },
+};
+
+function BsrGraphModal({ row, onClose }) {
+  const T = THEME;
+  const bc = BRAND_META[row.brand] || { accent:"#6B7280", light:"#F9FAFB", text:"#4B5563" };
+  const tier = getBsrTier(row.bsr);
+  const trendColor = row.trend==="up"?"#059669":row.trend==="down"?"#DC2626":"#6B7280";
+  const trendLabel = row.trend==="up"?"↑ Improving":row.trend==="down"?"↓ Declining":"→ Stable";
+  const stars = row.rating ? Math.round(row.rating) : 0;
+
+  // Hover state for tooltips
+  const [hover, setHover] = useState(null); // { chart, label, values }
+
+  // Chart geometry (Keepa-like proportions)
+  const W = 760, chartH = 150, ratingH = 110, salesH = 100;
+  const PAD_L = 60, PAD_R = 60, PAD_T = 14, PAD_B = 26;
+  const plotW = W - PAD_L - PAD_R;
+
+  // ── BSR data (inverted so lower rank = higher on chart, Keepa style) ──
+  const bsrData = [
+    { label:"365d avg", val:row.bsr_365d },
+    { label:"90d avg",  val:row.bsr_90d  },
+    { label:"30d avg",  val:row.bsr_30d  },
+    { label:"Current",  val:row.bsr      },
+  ].filter(p => p.val);
+
+  const bsrMax = bsrData.length ? Math.max(...bsrData.map(p=>p.val)) : 1;
+  const bsrMin = bsrData.length ? Math.min(...bsrData.map(p=>p.val)) : 0;
+  const bsrSpan = (bsrMax - bsrMin) || 1;
+  const xStep = bsrData.length > 1 ? plotW / (bsrData.length - 1) : 0;
+  const bsrX = i => PAD_L + i * xStep;
+  // Flipped: lower rank = higher on chart (like Keepa)
+  const bsrY = v => PAD_T + ((v - bsrMin) / bsrSpan) * (chartH - PAD_T - PAD_B);
+  const bsrPath = bsrData.map((p,i)=>`${i===0?"M":"L"}${bsrX(i)},${bsrY(p.val)}`).join(" ");
+  const bsrArea = bsrData.length>0 ? `${bsrPath} L${bsrX(bsrData.length-1)},${chartH-PAD_B} L${bsrX(0)},${chartH-PAD_B} Z` : "";
+
+  // ── Rating chart (1 to 5 scale) ──
+  const ratingY = v => PAD_T + ((5 - v) / 4) * (ratingH - PAD_T - PAD_B);
+  // Rating count growth (assume current = known, 365d ago = ~70%, 90d = ~88%, 30d = ~95%)
+  const estRC = row.reviews ? [
+    { label:"365d", val: Math.round(row.reviews * 0.70) },
+    { label:"90d",  val: Math.round(row.reviews * 0.88) },
+    { label:"30d",  val: Math.round(row.reviews * 0.95) },
+    { label:"Now",  val: row.reviews },
+  ] : [];
+  const rcMax = estRC.length ? Math.max(...estRC.map(p=>p.val)) || 1 : 1;
+  const rcY = v => PAD_T + (1 - v / rcMax) * (ratingH - PAD_T - PAD_B);
+  const rcPath = estRC.map((p,i)=>`${i===0?"M":"L"}${bsrX(i)},${rcY(p.val)}`).join(" ");
+
+  // ── Monthly Sold bars ──
+  const monthlyVal = row.monthly_sold || 0;
+  const salesMax = Math.max(monthlyVal * 1.2, 10);
+  const salesY = v => PAD_T + (1 - v / salesMax) * (salesH - PAD_T - PAD_B);
+
+  const xLabels = ["365d ago", "90d ago", "30d ago", "Now"];
+
+  // Keepa-style color palette
+  const K_BSR    = "#2E9442";  // Keepa green for rank
+  const K_RATING = "#17A6A6";  // Keepa teal for rating
+  const K_RC     = "#9ACD32";  // Keepa yellow-green for rating count
+  const K_SOLD   = "#E8A33D";  // Keepa amber for sold
+
+  const fmtRank = v => v ? `#${v.toLocaleString("en-IN")}` : "—";
+
+  return (
+    <div onClick={onClose} style={{ position:"fixed", inset:0, background:"rgba(15,23,42,0.72)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999, padding:16 }}>
+      <div onClick={e=>e.stopPropagation()}
+        style={{ background:"#fff", borderRadius:14, width:820, maxWidth:"98vw", maxHeight:"92vh", overflow:"auto", boxShadow:"0 30px 90px rgba(0,0,0,0.35)", fontFamily:"'Inter','Segoe UI',sans-serif" }}>
+
+        {/* ── Header ── */}
+        <div style={{ padding:"14px 18px", borderBottom:`1px solid #E5E7EB`, display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", background:"#fff" }}>
+          <a href={`https://www.amazon.in/dp/${row.asin}`} target="_blank" rel="noreferrer"
+            style={{ fontFamily:"'DM Mono',monospace", fontSize:13, fontWeight:700, color:"#2563EB", textDecoration:"none" }}>
+            {row.asin}
+          </a>
+          <span style={{ background:bc.light, color:bc.text, borderRadius:20, padding:"2px 10px", fontSize:10, fontWeight:700 }}>{row.brand}</span>
+          <span style={{ background:tier.bg, color:tier.color, borderRadius:20, padding:"2px 9px", fontSize:10, fontWeight:700 }}>{tier.emoji} {tier.label}</span>
+          <span style={{ fontSize:10, color:"#6B7280", fontFamily:"'DM Mono',monospace", marginLeft:6 }}>KEEPA SNAPSHOT · 4 POINTS (365d → Now)</span>
+          <button onClick={onClose} style={{ marginLeft:"auto", border:"none", background:"transparent", fontSize:20, cursor:"pointer", color:"#6B7280", lineHeight:1 }}>✕</button>
+        </div>
+
+        {/* ── Three charts stacked ── */}
+        <div style={{ padding:"0 16px", background:"#fff" }}>
+
+          {/* Legend row */}
+          <div style={{ padding:"10px 6px 6px", display:"flex", gap:14, flexWrap:"wrap", alignItems:"center", fontSize:11 }}>
+            <span style={{ display:"flex", alignItems:"center", gap:5 }}><span style={{ width:12, height:3, background:K_BSR, borderRadius:2 }}/><span style={{ color:"#374151", fontWeight:600 }}>Sales Rank</span></span>
+            <span style={{ display:"flex", alignItems:"center", gap:5 }}><span style={{ width:12, height:3, background:K_RATING, borderRadius:2 }}/><span style={{ color:"#374151", fontWeight:600 }}>Rating</span></span>
+            <span style={{ display:"flex", alignItems:"center", gap:5 }}><span style={{ width:12, height:3, background:K_RC, borderRadius:2 }}/><span style={{ color:"#374151", fontWeight:600 }}>Rating Count</span></span>
+            <span style={{ display:"flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, background:K_SOLD, borderRadius:2 }}/><span style={{ color:"#374151", fontWeight:600 }}>Monthly Sold</span></span>
+            <a href={`https://keepa.com/#!product/12-${row.asin}`} target="_blank" rel="noreferrer"
+              style={{ marginLeft:"auto", background:"#F3F4F6", color:"#374151", fontSize:10, fontWeight:700, padding:"5px 10px", borderRadius:7, textDecoration:"none", border:"1px solid #E5E7EB" }}>
+              🔗 Open Full Keepa Chart →
+            </a>
+          </div>
+
+          {/* ═══ Chart 1: Sales Rank ═══ */}
+          <div style={{ position:"relative", marginBottom:4 }}>
+            <div style={{ fontSize:10, fontFamily:"'DM Mono',monospace", color:"#9CA3AF", fontWeight:700, padding:"2px 0 4px 6px", letterSpacing:0.5 }}>SALES RANK</div>
+            <svg width="100%" viewBox={`0 0 ${W} ${chartH}`} style={{ display:"block", background:"#FAFAFA", borderRadius:6, border:"1px solid #E5E7EB" }}>
+              <defs>
+                <linearGradient id="bsrFill" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%"   stopColor={K_BSR} stopOpacity="0.28"/>
+                  <stop offset="100%" stopColor={K_BSR} stopOpacity="0.02"/>
+                </linearGradient>
+              </defs>
+              {/* Horizontal gridlines */}
+              {[0,0.25,0.5,0.75,1].map((f,i)=>(
+                <g key={i}>
+                  <line x1={PAD_L} y1={PAD_T+f*(chartH-PAD_T-PAD_B)} x2={W-PAD_R} y2={PAD_T+f*(chartH-PAD_T-PAD_B)}
+                    stroke="#E5E7EB" strokeWidth="1" strokeDasharray={i===0||i===4?"0":"3,3"}/>
+                  <text x={PAD_L-6} y={PAD_T+f*(chartH-PAD_T-PAD_B)+3} textAnchor="end" fontSize="9" fill="#6B7280" fontFamily="'DM Mono',monospace">
+                    {fmtRank(Math.round(bsrMin + f*bsrSpan))}
+                  </text>
+                </g>
+              ))}
+              {/* Vertical gridlines (at each data point) */}
+              {bsrData.map((_,i)=>(
+                <line key={i} x1={bsrX(i)} y1={PAD_T} x2={bsrX(i)} y2={chartH-PAD_B}
+                  stroke="#F3F4F6" strokeWidth="1"/>
+              ))}
+              {/* Area */}
+              <path d={bsrArea} fill="url(#bsrFill)"/>
+              {/* Line */}
+              <path d={bsrPath} fill="none" stroke={K_BSR} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
+              {/* Points */}
+              {bsrData.map((p,i)=>(
+                <g key={i} style={{ cursor:"pointer" }}
+                   onMouseEnter={()=>setHover({ chart:"bsr", label:p.label, value:fmtRank(p.val), x:bsrX(i), y:bsrY(p.val) })}
+                   onMouseLeave={()=>setHover(null)}>
+                  <circle cx={bsrX(i)} cy={bsrY(p.val)} r="5" fill={K_BSR} stroke="#fff" strokeWidth="2"/>
+                  <circle cx={bsrX(i)} cy={bsrY(p.val)} r="10" fill="transparent"/>
+                </g>
+              ))}
+              {/* X axis labels */}
+              {bsrData.map((p,i)=>(
+                <text key={i} x={bsrX(i)} y={chartH-8} textAnchor="middle" fontSize="10" fill="#6B7280" fontFamily="'DM Mono',monospace">{xLabels[xLabels.length-bsrData.length+i]}</text>
+              ))}
+              {/* Tooltip */}
+              {hover && hover.chart==="bsr" && (
+                <g>
+                  <rect x={hover.x-50} y={hover.y-40} width={100} height={30} rx={5} fill="#111827" opacity="0.95"/>
+                  <text x={hover.x} y={hover.y-24} textAnchor="middle" fontSize="9" fill="#9CA3AF">{hover.label}</text>
+                  <text x={hover.x} y={hover.y-12} textAnchor="middle" fontSize="11" fill="#fff" fontWeight="700" fontFamily="'DM Mono',monospace">{hover.value}</text>
+                </g>
+              )}
+            </svg>
+          </div>
+
+          {/* ═══ Chart 2: Rating + Rating Count ═══ */}
+          <div style={{ position:"relative", marginBottom:4 }}>
+            <div style={{ fontSize:10, fontFamily:"'DM Mono',monospace", color:"#9CA3AF", fontWeight:700, padding:"2px 0 4px 6px", letterSpacing:0.5 }}>RATING &amp; RATING COUNT</div>
+            <svg width="100%" viewBox={`0 0 ${W} ${ratingH}`} style={{ display:"block", background:"#FAFAFA", borderRadius:6, border:"1px solid #E5E7EB" }}>
+              {/* Horizontal gridlines (rating scale) */}
+              {[1,2,3,4,5].map((r,i)=>(
+                <g key={r}>
+                  <line x1={PAD_L} y1={ratingY(r)} x2={W-PAD_R} y2={ratingY(r)}
+                    stroke="#E5E7EB" strokeWidth="1" strokeDasharray={r===1||r===5?"0":"3,3"}/>
+                  <text x={PAD_L-6} y={ratingY(r)+3} textAnchor="end" fontSize="9" fill="#17A6A6" fontFamily="'DM Mono',monospace" fontWeight="600">{r}★</text>
+                </g>
+              ))}
+              {/* Rating Count axis on right */}
+              {estRC.length > 0 && [0, 0.5, 1].map((f,i)=>(
+                <text key={i} x={W-PAD_R+6} y={PAD_T+(1-f)*(ratingH-PAD_T-PAD_B)+3} textAnchor="start" fontSize="9" fill="#7CB342" fontFamily="'DM Mono',monospace" fontWeight="600">
+                  {Math.round(rcMax*f).toLocaleString("en-IN")}
+                </text>
+              ))}
+              {/* Rating line (flat since we only have current) */}
+              {row.rating && (
+                <g>
+                  <line x1={PAD_L} y1={ratingY(row.rating)} x2={W-PAD_R} y2={ratingY(row.rating)}
+                    stroke={K_RATING} strokeWidth="2" strokeDasharray="0"/>
+                  {bsrData.map((_,i)=>(
+                    <circle key={i} cx={bsrX(i)} cy={ratingY(row.rating)} r="4" fill={K_RATING} stroke="#fff" strokeWidth="1.5"/>
+                  ))}
+                </g>
+              )}
+              {/* Rating Count trend line */}
+              {estRC.length > 1 && (
+                <g>
+                  <path d={rcPath} fill="none" stroke={K_RC} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                  {estRC.map((p,i)=>(
+                    <g key={i} style={{ cursor:"pointer" }}
+                       onMouseEnter={()=>setHover({ chart:"rc", label:p.label, value:`${p.val.toLocaleString("en-IN")} ratings`, x:bsrX(i), y:rcY(p.val) })}
+                       onMouseLeave={()=>setHover(null)}>
+                      <circle cx={bsrX(i)} cy={rcY(p.val)} r="4" fill={K_RC} stroke="#fff" strokeWidth="1.5"/>
+                      <circle cx={bsrX(i)} cy={rcY(p.val)} r="10" fill="transparent"/>
+                    </g>
+                  ))}
+                </g>
+              )}
+              {/* X labels */}
+              {bsrData.map((p,i)=>(
+                <text key={i} x={bsrX(i)} y={ratingH-8} textAnchor="middle" fontSize="10" fill="#6B7280" fontFamily="'DM Mono',monospace">{xLabels[xLabels.length-bsrData.length+i]}</text>
+              ))}
+              {/* Tooltip for rating count */}
+              {hover && hover.chart==="rc" && (
+                <g>
+                  <rect x={hover.x-55} y={hover.y-40} width={110} height={30} rx={5} fill="#111827" opacity="0.95"/>
+                  <text x={hover.x} y={hover.y-24} textAnchor="middle" fontSize="9" fill="#9CA3AF">{hover.label}</text>
+                  <text x={hover.x} y={hover.y-12} textAnchor="middle" fontSize="11" fill="#fff" fontWeight="700" fontFamily="'DM Mono',monospace">{hover.value}</text>
+                </g>
+              )}
+              {/* Note about estimated rating count */}
+              <text x={PAD_L} y={ratingH-2} fontSize="8" fill="#9CA3AF" fontStyle="italic">Rating Count trend estimated from current value</text>
+            </svg>
+          </div>
+
+          {/* ═══ Chart 3: Monthly Sold bars ═══ */}
+          <div style={{ position:"relative", marginBottom:10 }}>
+            <div style={{ fontSize:10, fontFamily:"'DM Mono',monospace", color:"#9CA3AF", fontWeight:700, padding:"2px 0 4px 6px", letterSpacing:0.5 }}>MONTHLY SOLD</div>
+            <svg width="100%" viewBox={`0 0 ${W} ${salesH}`} style={{ display:"block", background:"#FAFAFA", borderRadius:6, border:"1px solid #E5E7EB" }}>
+              {/* Gridlines */}
+              {[0, 0.5, 1].map((f,i)=>(
+                <g key={i}>
+                  <line x1={PAD_L} y1={PAD_T+f*(salesH-PAD_T-PAD_B)} x2={W-PAD_R} y2={PAD_T+f*(salesH-PAD_T-PAD_B)}
+                    stroke="#E5E7EB" strokeWidth="1" strokeDasharray={i===0||i===2?"0":"3,3"}/>
+                  <text x={PAD_L-6} y={PAD_T+f*(salesH-PAD_T-PAD_B)+3} textAnchor="end" fontSize="9" fill="#6B7280" fontFamily="'DM Mono',monospace">
+                    {Math.round((1-f)*salesMax).toLocaleString("en-IN")}
+                  </text>
+                </g>
+              ))}
+              {/* Bar for current monthly sold */}
+              {monthlyVal > 0 ? (
+                <g>
+                  <rect x={PAD_L + plotW*0.35} y={salesY(monthlyVal)} width={plotW*0.3}
+                    height={salesH - PAD_B - salesY(monthlyVal)}
+                    fill={K_SOLD} rx="3"/>
+                  <text x={PAD_L + plotW*0.5} y={salesY(monthlyVal)-6} textAnchor="middle" fontSize="12" fill="#374151" fontWeight="700" fontFamily="'DM Mono',monospace">
+                    {monthlyVal}+ units/mo
+                  </text>
+                </g>
+              ) : (
+                <text x={W/2} y={salesH/2} textAnchor="middle" fontSize="11" fill="#9CA3AF" fontStyle="italic">No monthly sales data available</text>
+              )}
+              {/* Drops indicator */}
+              {row.drops_30d > 0 && (
+                <g>
+                  <text x={W-PAD_R-6} y={PAD_T+10} textAnchor="end" fontSize="10" fill="#DC2626" fontWeight="700" fontFamily="'DM Mono',monospace">
+                    ↓ {row.drops_30d} drops in last 30d
+                  </text>
+                </g>
+              )}
+              <text x={PAD_L + plotW*0.5} y={salesH-8} textAnchor="middle" fontSize="10" fill="#6B7280" fontFamily="'DM Mono',monospace">Current month</text>
+            </svg>
+          </div>
+        </div>
+
+        {/* ── Keepa-style data strip at bottom ── */}
+        <div style={{ padding:"10px 18px", background:"#F9FAFB", borderTop:`1px solid #E5E7EB`, display:"flex", alignItems:"center", gap:16, flexWrap:"wrap" }}>
+          <div style={{ display:"flex", alignItems:"center", gap:0 }}>
+            <div style={{ width:8, height:8, borderRadius:"50%", background:K_BSR, marginRight:7 }} />
+            <span style={{ fontSize:10, color:"#6B7280", fontWeight:700, marginRight:10 }}>SALES RANK</span>
+            {[["Current",row.bsr],["30d avg",row.bsr_30d],["90d avg",row.bsr_90d],["365d avg",row.bsr_365d]].map(([l,v],i)=>(
+              <div key={l} style={{ marginRight:16 }}>
+                <div style={{ fontSize:13, fontWeight:800, color:i===0?tier.color:"#374151", fontFamily:"'DM Mono',monospace" }}>
+                  {v?`#${v.toLocaleString("en-IN")}`:"—"}
+                </div>
+                <div style={{ fontSize:9, color:"#9CA3AF", textTransform:"uppercase", letterSpacing:0.5 }}>{l}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ width:"1px", background:"#E5E7EB", alignSelf:"stretch" }} />
+          <div style={{ fontSize:11, fontWeight:700, color:trendColor }}>{trendLabel}</div>
+          <div style={{ width:"1px", background:"#E5E7EB", alignSelf:"stretch" }} />
+          <span style={{ fontSize:11, color:K_BSR, fontWeight:700, fontFamily:"'DM Mono',monospace" }}>↓ {row.drops_30d || 0} drops/mo</span>
+        </div>
+
+        {/* ── Bottom: Rating · Rating Count · Monthly sold · Actions ── */}
+        <div style={{ padding:"12px 18px", display:"flex", gap:20, alignItems:"center", background:"#fff", borderTop:`1px solid #E5E7EB`, flexWrap:"wrap" }}>
+          <div>
+            <div style={{ fontSize:9, color:"#9CA3AF", marginBottom:3, textTransform:"uppercase", letterSpacing:0.5, fontWeight:700 }}>Rating</div>
+            <div style={{ display:"flex", alignItems:"center", gap:3 }}>
+              {[1,2,3,4,5].map(s=>(
+                <div key={s} style={{ width:12, height:12, background:s<=stars?"#F59E0B":"#E5E7EB", clipPath:"polygon(50% 0%,61% 35%,98% 35%,68% 57%,79% 91%,50% 70%,21% 91%,32% 57%,2% 35%,39% 35%)" }} />
+              ))}
+              <span style={{ fontSize:13, fontWeight:700, color:"#111827", marginLeft:5 }}>{row.rating||"—"}</span>
+            </div>
+          </div>
+          <div style={{ width:"1px", background:"#E5E7EB", alignSelf:"stretch" }} />
+          <div>
+            <div style={{ fontSize:9, color:"#9CA3AF", marginBottom:3, textTransform:"uppercase", letterSpacing:0.5, fontWeight:700 }}>Rating Count</div>
+            <div style={{ fontSize:13, fontWeight:700, color:"#111827", fontFamily:"'DM Mono',monospace" }}>{row.reviews?.toLocaleString("en-IN")||"—"}</div>
+          </div>
+          <div style={{ width:"1px", background:"#E5E7EB", alignSelf:"stretch" }} />
+          <div>
+            <div style={{ fontSize:9, color:"#9CA3AF", marginBottom:3, textTransform:"uppercase", letterSpacing:0.5, fontWeight:700 }}>Monthly Sold</div>
+            <div style={{ fontSize:13, fontWeight:700, color:"#111827", fontFamily:"'DM Mono',monospace" }}>{row.monthly_sold?`${row.monthly_sold}+`:"—"}</div>
+          </div>
+          <div style={{ marginLeft:"auto", display:"flex", gap:8 }}>
+            <a href={`https://keepa.com/#!product/12-${row.asin}`} target="_blank" rel="noreferrer"
+              style={{ background:"#F3F4F6", color:"#374151", borderRadius:8, padding:"7px 14px", fontSize:11, fontWeight:700, textDecoration:"none", border:"1px solid #E5E7EB" }}>
+              Keepa →
+            </a>
+            <a href={`https://www.amazon.in/dp/${row.asin}`} target="_blank" rel="noreferrer"
+              style={{ background:bc.accent, color:"#fff", borderRadius:8, padding:"7px 14px", fontSize:11, fontWeight:700, textDecoration:"none" }}>
+              View on Amazon →
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// BsrFullPage — Keepa-style full-page chart view (opens on double-click)
+// ═══════════════════════════════════════════════════════════════════════
+function BsrFullPage({ row, onBack }) {
+  const bc = BRAND_META[row.brand] || { accent:"#6B7280", light:"#F9FAFB", text:"#4B5563" };
+  const tier = getBsrTier(row.bsr);
+  const trendColor = row.trend==="up"?"#059669":row.trend==="down"?"#DC2626":"#6B7280";
+  const trendLabel = row.trend==="up"?"↑ Improving":row.trend==="down"?"↓ Declining":"→ Stable";
+  const stars = row.rating ? Math.round(row.rating) : 0;
+
+  // Hover crosshair state (index of x-position user is hovering)
+  const [hoverIdx, setHoverIdx] = useState(null);
+  const [rangeMode, setRangeMode] = useState("all"); // day/week/month/3m/year/all
+  const [visible, setVisible] = useState({ bsr:true, rating:true, rc:true, sold:true });
+
+  // ── Build data series ──
+  // X-axis points: 365d, 90d, 30d, Now  (we only have 4 snapshots)
+  const allPoints = [
+    { label:"365d ago", xLabel:"365d", val_bsr: row.bsr_365d, val_rating: row.rating, val_rc: row.reviews ? Math.round(row.reviews * 0.70) : null, val_sold: null },
+    { label:"90d ago",  xLabel:"90d",  val_bsr: row.bsr_90d,  val_rating: row.rating, val_rc: row.reviews ? Math.round(row.reviews * 0.88) : null, val_sold: null },
+    { label:"30d ago",  xLabel:"30d",  val_bsr: row.bsr_30d,  val_rating: row.rating, val_rc: row.reviews ? Math.round(row.reviews * 0.95) : null, val_sold: null },
+    { label:"Current",  xLabel:"Now",  val_bsr: row.bsr,      val_rating: row.rating, val_rc: row.reviews,                                          val_sold: row.monthly_sold },
+  ];
+  // Filter visible range
+  const rangeFilter = {
+    "day":   (p,i) => i === 3,
+    "week":  (p,i) => i === 3,
+    "month": (p,i) => i >= 2,
+    "3m":    (p,i) => i >= 1,
+    "year":  (p,i) => true,
+    "all":   (p,i) => true,
+  }[rangeMode];
+  const points = allPoints.filter(rangeFilter);
+
+  // Chart geometry
+  const W = 1120, plotL = 80, plotR = 80;
+  const chartW = W - plotL - plotR;
+  const H_BSR = 240, H_MID = 190, H_SOLD = 150;
+  const PAD_T = 20, PAD_B = 28;
+
+  // X positions
+  const xAt = i => points.length > 1 ? plotL + (i / (points.length - 1)) * chartW : plotL + chartW / 2;
+
+  // ── BSR series ──
+  const bsrVals = points.map(p => p.val_bsr).filter(v => v);
+  const bsrMax = bsrVals.length ? Math.max(...bsrVals) : 1;
+  const bsrMin = bsrVals.length ? Math.min(...bsrVals) : 0;
+  const bsrSpan = (bsrMax - bsrMin) || 1;
+  const bsrY = v => PAD_T + ((v - bsrMin) / bsrSpan) * (H_BSR - PAD_T - PAD_B);
+  const bsrPath = points.filter(p=>p.val_bsr).map((p,i)=>{
+    const realI = points.indexOf(p);
+    return `${i===0?"M":"L"}${xAt(realI)},${bsrY(p.val_bsr)}`;
+  }).join(" ");
+
+  // ── Rating count series ──
+  const rcVals = points.map(p => p.val_rc).filter(v => v);
+  const rcMax = rcVals.length ? Math.max(...rcVals) : 1;
+  const rcY = v => PAD_T + (1 - v / rcMax) * (H_MID - PAD_T - PAD_B);
+  const rcPath = points.filter(p=>p.val_rc).map((p,i)=>{
+    const realI = points.indexOf(p);
+    return `${i===0?"M":"L"}${xAt(realI)},${rcY(p.val_rc)}`;
+  }).join(" ");
+  // Rating line (flat - only current known)
+  const ratingYFn = v => PAD_T + ((5 - v) / 4) * (H_MID - PAD_T - PAD_B);
+
+  // ── Sold bars ──
+  const soldMax = Math.max((row.monthly_sold || 0) * 1.2, 10);
+  const soldY = v => PAD_T + (1 - v / soldMax) * (H_SOLD - PAD_T - PAD_B);
+
+  // Keepa palette
+  const K_BSR    = "#2E9442";
+  const K_RATING = "#17A6A6";
+  const K_RC     = "#9ACD32";
+  const K_SOLD   = "#E8A33D";
+
+  // Format helpers
+  const fmtRank = v => v ? `#${v.toLocaleString("en-IN")}` : "—";
+  const fmtNum  = v => v ? v.toLocaleString("en-IN") : "—";
+
+  // Generic chart shell (gridlines + hover crosshair + x axis)
+  const ChartShell = ({ height, yLabelLeft, yLabelRight, yTicksLeft=5, yTicksRight=3, minLeft, maxLeft, colorLeft, maxRight, colorRight, children, crosshairData }) => {
+    const h = height;
+    return (
+      <svg width="100%" viewBox={`0 0 ${W} ${h}`} preserveAspectRatio="none"
+        style={{ display:"block", background:"#fff", border:"1px solid #E5E7EB" }}
+        onMouseMove={e => {
+          const svg = e.currentTarget;
+          const pt = svg.getBoundingClientRect();
+          const x = ((e.clientX - pt.left) / pt.width) * W;
+          if (x < plotL || x > W - plotR) { setHoverIdx(null); return; }
+          const rel = (x - plotL) / chartW;
+          const idx = Math.round(rel * (points.length - 1));
+          setHoverIdx(Math.max(0, Math.min(points.length-1, idx)));
+        }}
+        onMouseLeave={()=>setHoverIdx(null)}>
+        {/* Horizontal gridlines */}
+        {Array.from({length:yTicksLeft},(_,i)=>i).map(i=>{
+          const f = i/(yTicksLeft-1);
+          const y = PAD_T + f * (h - PAD_T - PAD_B);
+          const val = minLeft !== undefined ? Math.round(minLeft + (maxLeft - minLeft) * f) : null;
+          return (
+            <g key={`gl-${i}`}>
+              <line x1={plotL} y1={y} x2={W-plotR} y2={y} stroke="#F3F4F6" strokeWidth="1" strokeDasharray={i===0||i===yTicksLeft-1?"0":"2,3"}/>
+              {val !== null && <text x={plotL-8} y={y+3} textAnchor="end" fontSize="10" fill={colorLeft} fontFamily="'DM Mono',monospace" fontWeight="600">{yLabelLeft ? yLabelLeft(val, f) : val}</text>}
+            </g>
+          );
+        })}
+        {/* Right axis labels */}
+        {maxRight !== undefined && Array.from({length:yTicksRight},(_,i)=>i).map(i=>{
+          const f = i/(yTicksRight-1);
+          const y = PAD_T + f * (h - PAD_T - PAD_B);
+          const val = Math.round(maxRight * (1-f));
+          return <text key={`gr-${i}`} x={W-plotR+8} y={y+3} textAnchor="start" fontSize="10" fill={colorRight} fontFamily="'DM Mono',monospace" fontWeight="600">{yLabelRight ? yLabelRight(val) : val}</text>;
+        })}
+        {/* Vertical gridlines at data points */}
+        {points.map((p,i)=>(
+          <line key={`vg-${i}`} x1={xAt(i)} y1={PAD_T} x2={xAt(i)} y2={h-PAD_B} stroke="#FAFAFA" strokeWidth="1"/>
+        ))}
+        {children}
+        {/* X axis labels */}
+        {points.map((p,i)=>(
+          <text key={`x-${i}`} x={xAt(i)} y={h-10} textAnchor="middle" fontSize="11" fill="#6B7280" fontFamily="'DM Mono',monospace">{p.label}</text>
+        ))}
+        {/* Crosshair */}
+        {hoverIdx !== null && (
+          <g pointerEvents="none">
+            <line x1={xAt(hoverIdx)} y1={PAD_T} x2={xAt(hoverIdx)} y2={h-PAD_B} stroke="#9CA3AF" strokeWidth="1" strokeDasharray="4,3"/>
+          </g>
+        )}
+      </svg>
+    );
+  };
+
+  const hoveredPoint = hoverIdx !== null ? points[hoverIdx] : null;
+
+  return (
+    <div style={{ fontFamily:"'Inter','Segoe UI',sans-serif", background:"#F5F5F5", minHeight:"100vh" }}>
+
+      {/* Top bar — ASIN info + back */}
+      <div style={{ background:"#fff", borderBottom:"1px solid #E5E7EB", padding:"12px 24px", display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
+        <button onClick={onBack} style={{ background:"#F3F4F6", color:"#374151", border:"1px solid #E5E7EB", borderRadius:8, padding:"7px 14px", fontSize:12, fontWeight:700, cursor:"pointer" }}>← Back to Table</button>
+        <a href={`https://www.amazon.in/dp/${row.asin}`} target="_blank" rel="noreferrer"
+          style={{ fontFamily:"'DM Mono',monospace", fontSize:15, fontWeight:700, color:"#2563EB", textDecoration:"none" }}>
+          {row.asin}
+        </a>
+        <span style={{ background:bc.light, color:bc.text, borderRadius:20, padding:"3px 11px", fontSize:11, fontWeight:700 }}>{row.brand}</span>
+        <span style={{ background:tier.bg, color:tier.color, borderRadius:20, padding:"3px 10px", fontSize:11, fontWeight:700 }}>{tier.emoji} {tier.label}</span>
+        {row.model && row.model !== "—" && <span style={{ fontSize:12, color:"#6B7280" }}>Model: <strong style={{ color:"#111827" }}>{row.model}</strong></span>}
+        {row.category && row.category !== "—" && <span style={{ fontSize:12, color:"#6B7280" }}>Category: <strong style={{ color:"#111827" }}>{row.category}</strong></span>}
+        <div style={{ marginLeft:"auto", display:"flex", gap:8 }}>
+          <a href={`https://keepa.com/#!product/12-${row.asin}`} target="_blank" rel="noreferrer"
+            style={{ background:"#F3F4F6", color:"#374151", borderRadius:8, padding:"7px 14px", fontSize:12, fontWeight:700, textDecoration:"none", border:"1px solid #E5E7EB" }}>
+            🔗 Open in Keepa
+          </a>
+          <a href={`https://www.amazon.in/dp/${row.asin}`} target="_blank" rel="noreferrer"
+            style={{ background:bc.accent, color:"#fff", borderRadius:8, padding:"7px 14px", fontSize:12, fontWeight:700, textDecoration:"none" }}>
+            View on Amazon →
+          </a>
+        </div>
+      </div>
+
+      {/* Main content: charts (left) + legend sidebar (right) */}
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 260px", gap:16, padding:16 }}>
+
+        {/* Charts column */}
+        <div style={{ background:"#fff", borderRadius:10, border:"1px solid #E5E7EB", padding:"14px 16px" }}>
+
+          {/* Page title + range selector + hover indicator */}
+          <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:12, flexWrap:"wrap" }}>
+            <div style={{ fontSize:14, fontWeight:700, color:"#111827" }}>Keepa-style Chart View</div>
+            <span style={{ fontSize:11, color:"#6B7280" }}>Hover anywhere on the charts to see values</span>
+            <div style={{ marginLeft:"auto", display:"flex", gap:4, background:"#F9FAFB", borderRadius:8, padding:4, border:"1px solid #E5E7EB" }}>
+              {[
+                { k:"day",   l:"Day" },
+                { k:"week",  l:"Week" },
+                { k:"month", l:"Month" },
+                { k:"3m",    l:"3 Months" },
+                { k:"year",  l:"Year" },
+                { k:"all",   l:"All" },
+              ].map(r => (
+                <button key={r.k} onClick={()=>setRangeMode(r.k)}
+                  style={{ padding:"4px 10px", fontSize:10, fontWeight:700, borderRadius:6, cursor:"pointer",
+                           background: rangeMode === r.k ? "#2563EB" : "transparent",
+                           color: rangeMode === r.k ? "#fff" : "#6B7280",
+                           border: "none" }}>
+                  {r.l}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* ══ CHART 1: Sales Rank ══ */}
+          <div style={{ marginBottom:4 }}>
+            <div style={{ fontSize:10, fontFamily:"'DM Mono',monospace", color:"#9CA3AF", fontWeight:700, padding:"0 0 4px 6px", letterSpacing:0.5, display:"flex", alignItems:"center", gap:8 }}>
+              <span style={{ width:10, height:10, borderRadius:"50%", background:K_BSR, display:"inline-block" }}/>
+              SALES RANK
+              <span style={{ color:"#6B7280", marginLeft:4 }}>(lower is better)</span>
+            </div>
+            <ChartShell height={H_BSR}
+              minLeft={bsrMin} maxLeft={bsrMax} colorLeft="#6B7280"
+              yTicksLeft={6}
+              yLabelLeft={(v, f) => fmtRank(Math.round(bsrMin + (bsrMax-bsrMin)*f))}>
+              {visible.bsr && (
+                <>
+                  <defs>
+                    <linearGradient id="bsrFillFP" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%"   stopColor={K_BSR} stopOpacity="0.22"/>
+                      <stop offset="100%" stopColor={K_BSR} stopOpacity="0.02"/>
+                    </linearGradient>
+                  </defs>
+                  {/* Area */}
+                  {bsrVals.length > 1 && (() => {
+                    const pts = points.filter(p=>p.val_bsr);
+                    const first = points.indexOf(pts[0]);
+                    const last = points.indexOf(pts[pts.length-1]);
+                    return <path d={`${bsrPath} L${xAt(last)},${H_BSR-PAD_B} L${xAt(first)},${H_BSR-PAD_B} Z`} fill="url(#bsrFillFP)"/>;
+                  })()}
+                  <path d={bsrPath} fill="none" stroke={K_BSR} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  {points.map((p,i)=>p.val_bsr && (
+                    <circle key={i} cx={xAt(i)} cy={bsrY(p.val_bsr)} r={hoverIdx===i?6:4} fill={K_BSR} stroke="#fff" strokeWidth="2"/>
+                  ))}
+                </>
+              )}
+            </ChartShell>
+          </div>
+
+          {/* ══ CHART 2: Rating (left axis) + Rating Count (right axis) ══ */}
+          <div style={{ marginTop:10, marginBottom:4 }}>
+            <div style={{ fontSize:10, fontFamily:"'DM Mono',monospace", color:"#9CA3AF", fontWeight:700, padding:"0 0 4px 6px", letterSpacing:0.5, display:"flex", alignItems:"center", gap:12 }}>
+              <span style={{ display:"flex", alignItems:"center", gap:5 }}>
+                <span style={{ width:10, height:10, borderRadius:"50%", background:K_RATING, display:"inline-block" }}/>
+                RATING <span style={{ color:"#6B7280" }}>(1–5★, left axis)</span>
+              </span>
+              <span style={{ display:"flex", alignItems:"center", gap:5 }}>
+                <span style={{ width:10, height:10, borderRadius:"50%", background:K_RC, display:"inline-block" }}/>
+                RATING COUNT <span style={{ color:"#6B7280" }}>(right axis, estimated trend)</span>
+              </span>
+            </div>
+            <ChartShell height={H_MID}
+              minLeft={1} maxLeft={5} colorLeft={K_RATING} yTicksLeft={5}
+              yLabelLeft={(v)=>`${v}★`}
+              maxRight={rcMax} colorRight={K_RC} yTicksRight={3}
+              yLabelRight={(v)=>fmtNum(v)}>
+              {/* Rating flat line */}
+              {visible.rating && row.rating && (
+                <g>
+                  <line x1={xAt(0)} y1={ratingYFn(row.rating)} x2={xAt(points.length-1)} y2={ratingYFn(row.rating)}
+                    stroke={K_RATING} strokeWidth="2.5"/>
+                  {points.map((_,i)=>(
+                    <circle key={i} cx={xAt(i)} cy={ratingYFn(row.rating)} r={hoverIdx===i?6:4} fill={K_RATING} stroke="#fff" strokeWidth="2"/>
+                  ))}
+                </g>
+              )}
+              {/* Rating Count trend */}
+              {visible.rc && rcVals.length > 1 && (
+                <g>
+                  <path d={rcPath} fill="none" stroke={K_RC} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  {points.map((p,i)=>p.val_rc && (
+                    <circle key={i} cx={xAt(i)} cy={rcY(p.val_rc)} r={hoverIdx===i?6:4} fill={K_RC} stroke="#fff" strokeWidth="2"/>
+                  ))}
+                </g>
+              )}
+            </ChartShell>
+          </div>
+
+          {/* ══ CHART 3: Monthly Sold ══ */}
+          <div style={{ marginTop:10 }}>
+            <div style={{ fontSize:10, fontFamily:"'DM Mono',monospace", color:"#9CA3AF", fontWeight:700, padding:"0 0 4px 6px", letterSpacing:0.5, display:"flex", alignItems:"center", gap:8 }}>
+              <span style={{ width:10, height:10, borderRadius:2, background:K_SOLD, display:"inline-block" }}/>
+              MONTHLY SOLD
+              {row.drops_30d ? <span style={{ marginLeft:"auto", color:"#DC2626", fontWeight:700 }}>↓ {row.drops_30d} drops in last 30d</span> : null}
+            </div>
+            <ChartShell height={H_SOLD}
+              minLeft={0} maxLeft={soldMax} colorLeft="#6B7280" yTicksLeft={4}
+              yLabelLeft={(v)=>fmtNum(v)}>
+              {visible.sold && row.monthly_sold && (
+                <g>
+                  <rect
+                    x={xAt(points.length-1) - 30}
+                    y={soldY(row.monthly_sold)}
+                    width={60}
+                    height={H_SOLD - PAD_B - soldY(row.monthly_sold)}
+                    fill={K_SOLD} rx="3"/>
+                  <text x={xAt(points.length-1)} y={soldY(row.monthly_sold)-7} textAnchor="middle" fontSize="13" fill="#374151" fontWeight="700" fontFamily="'DM Mono',monospace">
+                    {row.monthly_sold}+
+                  </text>
+                </g>
+              )}
+              {!row.monthly_sold && (
+                <text x={W/2} y={H_SOLD/2} textAnchor="middle" fontSize="12" fill="#9CA3AF" fontStyle="italic">No monthly sales data available</text>
+              )}
+            </ChartShell>
+          </div>
+
+          {/* Keepa-style stat line under charts */}
+          <div style={{ marginTop:14, padding:"10px 14px", background:"#F9FAFB", border:"1px solid #E5E7EB", borderRadius:8, display:"flex", alignItems:"center", gap:18, flexWrap:"wrap", fontSize:11 }}>
+            <div style={{ display:"flex", alignItems:"center", gap:5 }}>
+              <span style={{ width:8, height:8, borderRadius:"50%", background:K_BSR }}/>
+              <span style={{ color:"#6B7280", fontWeight:700 }}>Sales Rank</span>
+            </div>
+            {[["Current",row.bsr],["30d avg",row.bsr_30d],["90d avg",row.bsr_90d],["365d avg",row.bsr_365d]].map(([l,v],i)=>(
+              <div key={l}>
+                <div style={{ fontSize:13, fontWeight:800, color:i===0?tier.color:"#374151", fontFamily:"'DM Mono',monospace" }}>
+                  {fmtRank(v)}
+                </div>
+                <div style={{ fontSize:9, color:"#9CA3AF", textTransform:"uppercase", letterSpacing:0.5, fontWeight:600 }}>{l}</div>
+              </div>
+            ))}
+            <div style={{ width:"1px", background:"#E5E7EB", alignSelf:"stretch" }}/>
+            <span style={{ fontSize:11, fontWeight:700, color:trendColor }}>{trendLabel}</span>
+          </div>
+        </div>
+
+        {/* ══════════════ Right Sidebar (Keepa-style) ══════════════ */}
+        <div style={{ background:"#fff", borderRadius:10, border:"1px solid #E5E7EB", padding:"14px 14px", height:"fit-content", position:"sticky", top:16 }}>
+
+          {/* Legend toggles */}
+          <div style={{ fontSize:10, fontFamily:"'DM Mono',monospace", color:"#6B7280", fontWeight:700, letterSpacing:0.8, marginBottom:10 }}>CHART SERIES</div>
+          {[
+            { key:"bsr",    label:"Sales Rank",     color:K_BSR,    has:true },
+            { key:"rating", label:"Rating",         color:K_RATING, has:!!row.rating },
+            { key:"rc",     label:"Rating Count",   color:K_RC,     has:!!row.reviews },
+            { key:"sold",   label:"Monthly Sold",   color:K_SOLD,   has:!!row.monthly_sold },
+          ].map(item => (
+            <div key={item.key} onClick={()=> item.has && setVisible(v => ({ ...v, [item.key]: !v[item.key] }))}
+              style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 4px", cursor: item.has ? "pointer" : "default", opacity: item.has ? 1 : 0.4, fontSize:12 }}>
+              <span style={{ width:14, height:14, borderRadius:"50%", background: visible[item.key] && item.has ? item.color : "transparent", border:`2px solid ${item.color}` }}/>
+              <span style={{ color: visible[item.key] && item.has ? "#111827" : "#9CA3AF", fontWeight:600, textDecoration: !visible[item.key] ? "line-through" : "none" }}>
+                {item.label}
+              </span>
+              {!item.has && <span style={{ marginLeft:"auto", fontSize:9, color:"#DC2626", fontWeight:700 }}>NO DATA</span>}
+            </div>
+          ))}
+
+          {/* Not available notice */}
+          <div style={{ marginTop:14, padding:"10px 12px", background:"#FEF3C7", border:"1px solid #FCD34D", borderRadius:8, fontSize:10, color:"#92400E" }}>
+            <div style={{ fontWeight:700, marginBottom:4 }}>ℹ Not in our data</div>
+            <div style={{ lineHeight:1.5 }}>
+              Buy Box price, offer counts, category sub-ranks, and true daily history aren't included in the Keepa CSV export. Click <strong>🔗 Open in Keepa</strong> above for the full chart.
+            </div>
+          </div>
+
+          {/* Hover tooltip info panel */}
+          <div style={{ marginTop:14, padding:"12px", background:"#F9FAFB", border:"1px solid #E5E7EB", borderRadius:8 }}>
+            <div style={{ fontSize:10, fontFamily:"'DM Mono',monospace", color:"#6B7280", fontWeight:700, letterSpacing:0.8, marginBottom:8 }}>
+              {hoveredPoint ? hoveredPoint.label.toUpperCase() : "HOVER A CHART"}
+            </div>
+            {hoveredPoint ? (
+              <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                  <span style={{ display:"flex", alignItems:"center", gap:5, fontSize:11 }}>
+                    <span style={{ width:8, height:8, borderRadius:"50%", background:K_BSR }}/>
+                    Sales Rank
+                  </span>
+                  <span style={{ fontSize:12, fontWeight:700, fontFamily:"'DM Mono',monospace", color:"#111827" }}>
+                    {fmtRank(hoveredPoint.val_bsr)}
+                  </span>
+                </div>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                  <span style={{ display:"flex", alignItems:"center", gap:5, fontSize:11 }}>
+                    <span style={{ width:8, height:8, borderRadius:"50%", background:K_RATING }}/>
+                    Rating
+                  </span>
+                  <span style={{ fontSize:12, fontWeight:700, fontFamily:"'DM Mono',monospace", color:"#111827" }}>
+                    {hoveredPoint.val_rating ? `${hoveredPoint.val_rating}★` : "—"}
+                  </span>
+                </div>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                  <span style={{ display:"flex", alignItems:"center", gap:5, fontSize:11 }}>
+                    <span style={{ width:8, height:8, borderRadius:"50%", background:K_RC }}/>
+                    Rating Count
+                  </span>
+                  <span style={{ fontSize:12, fontWeight:700, fontFamily:"'DM Mono',monospace", color:"#111827" }}>
+                    {fmtNum(hoveredPoint.val_rc)}
+                  </span>
+                </div>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                  <span style={{ display:"flex", alignItems:"center", gap:5, fontSize:11 }}>
+                    <span style={{ width:8, height:8, borderRadius:2, background:K_SOLD }}/>
+                    Monthly Sold
+                  </span>
+                  <span style={{ fontSize:12, fontWeight:700, fontFamily:"'DM Mono',monospace", color:"#111827" }}>
+                    {hoveredPoint.val_sold ? `${hoveredPoint.val_sold}+` : "—"}
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <div style={{ fontSize:11, color:"#9CA3AF", fontStyle:"italic" }}>Move your cursor over a chart to see values at each snapshot.</div>
+            )}
+          </div>
+
+          {/* Key stats summary */}
+          <div style={{ marginTop:14, padding:"12px", background:"#F0FDF4", border:"1px solid #BBF7D0", borderRadius:8 }}>
+            <div style={{ fontSize:10, fontFamily:"'DM Mono',monospace", color:"#059669", fontWeight:700, letterSpacing:0.8, marginBottom:8 }}>SUMMARY</div>
+            <div style={{ display:"flex", flexDirection:"column", gap:8, fontSize:12 }}>
+              <div style={{ display:"flex", justifyContent:"space-between" }}>
+                <span style={{ color:"#374151" }}>Rating</span>
+                <span style={{ display:"flex", alignItems:"center", gap:3 }}>
+                  {[1,2,3,4,5].map(s=>(
+                    <div key={s} style={{ width:10, height:10, background:s<=stars?"#F59E0B":"#E5E7EB", clipPath:"polygon(50% 0%,61% 35%,98% 35%,68% 57%,79% 91%,50% 70%,21% 91%,32% 57%,2% 35%,39% 35%)" }}/>
+                  ))}
+                  <span style={{ fontWeight:700, color:"#111827", marginLeft:4 }}>{row.rating||"—"}</span>
+                </span>
+              </div>
+              <div style={{ display:"flex", justifyContent:"space-between" }}>
+                <span style={{ color:"#374151" }}>Drops / mo</span>
+                <span style={{ fontWeight:700, color:"#059669", fontFamily:"'DM Mono',monospace" }}>↓ {row.drops_30d || 0}</span>
+              </div>
+              <div style={{ display:"flex", justifyContent:"space-between" }}>
+                <span style={{ color:"#374151" }}>FBA SKU</span>
+                <span style={{ fontWeight:700, color:"#111827", fontFamily:"'DM Mono',monospace", fontSize:11 }}>{row.fbaSku || "—"}</span>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BsrTrackerPage({ onBack }) {
+  const T = THEME;
+  const [bsrBrand,   setBsrBrand]   = useState("All");
+  const [sortCol,    setSortCol]    = useState("bsr");   // column key currently sorted
+  const [sortDir,    setSortDir]    = useState("asc");   // "asc" | "desc"
+  const [bsrSearch,  setBsrSearch]  = useState("");
+  const [bsrPageNum, setBsrPageNum] = useState(1);
+  const [modalRow,   setModalRow]   = useState(null);
+  const [fullPageRow, setFullPageRow] = useState(null); // double-click opens Keepa-style full page
+  const [uploadedData, setUploadedData] = useState({}); // { brandName: [rows] }
+  const [toast,        setToast]        = useState(null); // { type, msg }
+  const [quickFilter,  setQuickFilter]  = useState(null); // null | 'top1k' | 'rising' | 'falling' | 'problem' | 'zero_sales'
+  const [uploadTimestamps, setUploadTimestamps] = useState({}); // { brand: Date }
+  const PAGE_SIZE = 20;
+
+  // Column definitions for sortable header
+  const COLUMNS = [
+    { key:"rank",         label:"#",              width:36,  sortable:false, align:"left" },
+    { key:"asin",         label:"ASIN",           width:120, sortable:true,  align:"left", type:"string" },
+    { key:"brand",        label:"BRAND",          width:130, sortable:true,  align:"left", type:"string" },
+    { key:"bsr",          label:"CURRENT RANK",   width:130, sortable:true,  align:"left", type:"number" },
+    { key:"trend",        label:"TREND",          width:110, sortable:true,  align:"left", type:"string" },
+    { key:"rating",       label:"RATING",         width:120, sortable:true,  align:"left", type:"number" },
+    { key:"reviews",      label:"RATING COUNT",   width:100, sortable:true,  align:"left", type:"number" },
+    { key:"bsr_30d",      label:"30D AVG RANK",   width:125, sortable:true,  align:"left", type:"number" },
+    { key:"drops_30d",    label:"FOOTFALL / 30D", width:150, sortable:true,  align:"left", type:"number" },
+    { key:"monthly_sold", label:"MONTHLY SOLD",   width:110, sortable:true,  align:"left", type:"number" },
+  ];
+
+  // Click handler: same column -> flip direction; new column -> set with sensible default
+  const handleSort = (key) => {
+    if (sortCol === key) {
+      setSortDir(d => d === "asc" ? "desc" : "asc");
+    } else {
+      setSortCol(key);
+      // Numbers default to desc (high first), strings default to asc (A→Z)
+      // Exception: bsr defaults to asc (best/lowest rank first) since lower = better
+      const col = COLUMNS.find(c => c.key === key);
+      setSortDir(key === "bsr" || key === "bsr_30d" || col?.type === "string" ? "asc" : "desc");
+    }
+    setBsrPageNum(1);
+  };
+
+  const allBrands = ["All","Audio Array","Nexlev","Tonor","White Mulberry"];
+
+  const data = useMemo(() => {
+    // Start with built-in data, normalized
+    const built = BSR_RAW.map(row => {
+      const m = ASIN_MASTER[row.asin] || {};
+      return { ...row,
+        model:    m.model    || "—",
+        category: m.category || "—",
+        fbaSku:   m.fbaSku   || "—",
+        brand: row.brand === "nexlev" ? "Nexlev" : row.brand === "TONOR" ? "Tonor" : row.brand,
+      };
+    });
+    // Replace any brand that has uploaded data with the new rows
+    const uploadedBrands = Object.keys(uploadedData);
+    if (uploadedBrands.length === 0) return built;
+    const kept = built.filter(r => !uploadedBrands.includes(r.brand));
+    const fresh = [];
+    uploadedBrands.forEach(b => {
+      (uploadedData[b] || []).forEach(row => {
+        const m = ASIN_MASTER[row.asin] || {};
+        fresh.push({
+          ...row,
+          brand: b,
+          model:    m.model    || "—",
+          category: m.category || "—",
+          fbaSku:   m.fbaSku   || "—",
+        });
+      });
+    });
+    return [...kept, ...fresh];
+  }, [uploadedData]);
+
+  const filtered = useMemo(() => {
+    let rows = data.filter(r => r.bsr > 0);
+    if (bsrBrand !== "All") rows = rows.filter(r => r.brand === bsrBrand);
+    if (bsrSearch.trim()) {
+      const q = bsrSearch.trim().toLowerCase();
+      rows = rows.filter(r => r.asin.toLowerCase().includes(q) || r.brand.toLowerCase().includes(q) || r.model.toLowerCase().includes(q));
+    }
+    // Quick filter chips
+    if (quickFilter === "top1k")      rows = rows.filter(r => r.bsr <= 1000);
+    if (quickFilter === "rising")     rows = rows.filter(r => r.trend === "up");
+    if (quickFilter === "falling")    rows = rows.filter(r => r.trend === "down");
+    if (quickFilter === "problem")    rows = rows.filter(r => (r.rating || 0) > 0 && r.rating < 4);
+    if (quickFilter === "zero_sales") rows = rows.filter(r => !r.drops_30d || r.drops_30d === 0);
+    const col = COLUMNS.find(c => c.key === sortCol);
+    const mult = sortDir === "asc" ? 1 : -1;
+    return [...rows].sort((a, b) => {
+      const av = a[sortCol];
+      const bv = b[sortCol];
+      // Push null/undefined/0 (for ranks) to the bottom regardless of direction
+      const aMissing = av === null || av === undefined || av === "" || (col?.type === "number" && !av);
+      const bMissing = bv === null || bv === undefined || bv === "" || (col?.type === "number" && !bv);
+      if (aMissing && bMissing) return 0;
+      if (aMissing) return 1;
+      if (bMissing) return -1;
+      if (col?.type === "string") {
+        return String(av).localeCompare(String(bv)) * mult;
+      }
+      return (av - bv) * mult;
+    });
+  }, [data, bsrBrand, bsrSearch, sortCol, sortDir, quickFilter]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const curPage    = Math.min(bsrPageNum, totalPages);
+  const paged      = filtered.slice((curPage-1)*PAGE_SIZE, curPage*PAGE_SIZE);
+
+  // Aggregate stats for KPI strip (across currently filtered brand)
+  const stats = useMemo(() => {
+    const scope = bsrBrand === "All" ? data.filter(r => r.bsr > 0) : data.filter(r => r.brand === bsrBrand && r.bsr > 0);
+    const best = scope.length ? Math.min(...scope.map(r => r.bsr)) : null;
+    const rising = scope.filter(r => r.trend === "up").length;
+    const falling = scope.filter(r => r.trend === "down").length;
+    const top1k = scope.filter(r => r.bsr <= 1000).length;
+    const avgDrops = scope.length ? Math.round(scope.reduce((s, r) => s + (r.drops_30d || 0), 0) / scope.length) : 0;
+    const totalMonthly = scope.reduce((s, r) => s + (r.monthly_sold || 0), 0);
+    const problem = scope.filter(r => (r.rating || 0) > 0 && r.rating < 4).length;
+    const zeroSales = scope.filter(r => !r.drops_30d || r.drops_30d === 0).length;
+    return { total: scope.length, best, rising, falling, top1k, avgDrops, totalMonthly, problem, zeroSales };
+  }, [data, bsrBrand]);
+
+  // Auto-dismiss toast after 3 seconds
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 3000);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  // Parse a Keepa CSV into BSR rows. Expected columns (10):
+  //   "Sales Rank: Current", "Sales Rank: 30 days avg.", "Sales Rank: 90 days avg.",
+  //   "Sales Rank: 365 days avg.", "Sales Rank: Drops last 30 days",
+  //   "Reviews: Rating", "Reviews: Rating Count", "ASIN", "Brand",
+  //   "Monthly Sales Trends: Monthly Sold (Last Known)"
+  const parseKeepaCsv = (text) => {
+    const parseRow = (line) => {
+      const out = []; let cur = ""; let q = false;
+      for (let i = 0; i < line.length; i++) {
+        const c = line[i];
+        if (c === '"') {
+          if (q && line[i+1] === '"') { cur += '"'; i++; }
+          else q = !q;
+        } else if (c === "," && !q) { out.push(cur); cur = ""; }
+        else cur += c;
+      }
+      out.push(cur);
+      return out.map(s => s.trim());
+    };
+    const lines = text.replace(/\r/g, "").split("\n").filter(l => l.trim());
+    if (lines.length < 2) return [];
+    const headers = parseRow(lines[0]);
+    const idx = (name) => headers.findIndex(h => h.toLowerCase().includes(name.toLowerCase()));
+    const iCurr   = idx("Sales Rank: Current");
+    const i30     = idx("Sales Rank: 30");
+    const i90     = idx("Sales Rank: 90");
+    const i365    = idx("Sales Rank: 365");
+    const iDrops  = idx("Drops last 30");
+    const iRating = idx("Reviews: Rating");
+    const iRevCnt = idx("Rating Count");
+    const iAsin   = idx("ASIN");
+    const iMonth  = idx("Monthly Sold");
+    const toNum = (v) => {
+      if (v === undefined || v === null) return null;
+      const s = String(v).replace(/[",#]/g, "").replace(/[\u00A0\s]/g, "").trim();
+      if (!s || s === "-" || s.toLowerCase() === "n/a") return null;
+      const n = parseFloat(s);
+      return isNaN(n) ? null : n;
+    };
+    const rows = [];
+    for (let li = 1; li < lines.length; li++) {
+      const cols = parseRow(lines[li]);
+      const asin = (cols[iAsin] || "").trim();
+      if (!asin || asin.length < 8) continue;
+      const bsr     = toNum(cols[iCurr]);
+      const bsr30   = toNum(cols[i30]);
+      const bsr90   = toNum(cols[i90]);
+      const bsr365  = toNum(cols[i365]);
+      const drops   = toNum(cols[iDrops]);
+      const rating  = toNum(cols[iRating]);
+      const reviews = toNum(cols[iRevCnt]);
+      const monthly = toNum(cols[iMonth]);
+      // Infer trend: compare current vs 30-day avg (lower rank = better)
+      let trend = "stable";
+      if (bsr && bsr30) {
+        const diff = (bsr30 - bsr) / bsr30;
+        if (diff > 0.1) trend = "up";      // current better than 30d avg = improving
+        else if (diff < -0.1) trend = "down";
+      }
+      rows.push({
+        asin,
+        bsr: bsr || 0,
+        bsr_30d: bsr30,
+        bsr_90d: bsr90,
+        bsr_365d: bsr365,
+        drops_30d: drops || 0,
+        rating: rating,
+        reviews: reviews,
+        monthly_sold: monthly,
+        trend,
+      });
+    }
+    return rows;
+  };
+
+  const handleBrandUpload = (brand, file) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const rows = parseKeepaCsv(e.target.result);
+        if (rows.length === 0) {
+          setToast({ type:"error", msg:`⚠️ No valid rows found in ${file.name}` });
+          return;
+        }
+        setUploadedData(prev => ({ ...prev, [brand]: rows }));
+        setUploadTimestamps(prev => ({ ...prev, [brand]: new Date() }));
+        setBsrPageNum(1);
+        setToast({ type:"success", msg:`✅ ${brand} updated — ${rows.length} ASINs loaded` });
+      } catch (err) {
+        setToast({ type:"error", msg:`❌ Failed to parse: ${err.message}` });
+      }
+    };
+    reader.onerror = () => setToast({ type:"error", msg:`❌ Could not read ${file.name}` });
+    reader.readAsText(file);
+  };
+
+  const exportCsv = () => {
+    const header = ["Rank","ASIN","Brand","Current Rank","30d Avg","90d Avg","365d Avg","Trend","Rating","Rating Count","Drops 30d","Monthly Sold"];
+    const lines = [header.join(",")];
+    filtered.forEach((r, i) => {
+      const vals = [
+        i + 1, r.asin, r.brand,
+        r.bsr || "", r.bsr_30d || "", r.bsr_90d || "", r.bsr_365d || "",
+        r.trend || "", r.rating || "", r.reviews || "", r.drops_30d || "", r.monthly_sold || "",
+      ];
+      lines.push(vals.map(v => {
+        const s = String(v);
+        return s.includes(",") ? `"${s.replace(/"/g, '""')}"` : s;
+      }).join(","));
+    });
+    const blob = new Blob([lines.join("\n")], { type:"text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const today = new Date().toISOString().slice(0,10);
+    const brandTag = bsrBrand === "All" ? "all" : bsrBrand.toLowerCase().replace(/\s+/g, "_");
+    a.download = `bsr_${brandTag}_${today}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setToast({ type:"success", msg:`📥 Exported ${filtered.length} rows` });
+  };
+
+  // Double-click opens full Keepa-like page
+  if (fullPageRow) {
+    return <BsrFullPage row={fullPageRow} onBack={()=>setFullPageRow(null)} />;
+  }
+
+  return (
+    <div style={{ fontFamily:"'Inter','Segoe UI',sans-serif", background:T.pageBg, minHeight:"100vh", color:T.text }}>
+
+      {modalRow && <BsrGraphModal row={modalRow} onClose={()=>setModalRow(null)} />}
+
+      {/* Top Header — matches Smart View */}
+      <div style={{ background:T.surface, borderBottom:`1px solid ${T.border}`, padding:"0 24px", display:"flex", alignItems:"center", justifyContent:"space-between", minHeight:64 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+          <button onClick={onBack} style={{ background:T.surfaceMuted, color:T.textSoft, border:`1px solid ${T.border}`, borderRadius:8, padding:"6px 12px", fontSize:11, fontWeight:700, cursor:"pointer" }}>← Back</button>
+          <div style={{ width:32, height:32, borderRadius:8, background:"linear-gradient(135deg,#38BDF8,#2563EB)", display:"flex", alignItems:"center", justifyContent:"center", marginLeft:4 }}>
+            <span style={{ color:"#fff", fontSize:13, fontWeight:800 }}>📊</span>
+          </div>
+          <div>
+            <div style={{ fontSize:15, fontWeight:700, color:T.text, letterSpacing:-0.4 }}>BSR Tracker</div>
+            <div style={{ fontSize:9, color:T.textFaint, fontFamily:"'DM Mono',monospace", letterSpacing:1 }}>CLICK = PREVIEW · DOUBLE-CLICK = FULL CHART</div>
+          </div>
+        </div>
+        <div style={{ display:"flex", gap:10, alignItems:"center" }}>
+          {(() => {
+            const ts = Object.values(uploadTimestamps);
+            const latest = ts.length ? new Date(Math.max(...ts.map(d => d.getTime()))) : null;
+            const display = latest
+              ? latest.toLocaleString("en-IN", { day:"2-digit", month:"short", hour:"2-digit", minute:"2-digit" })
+              : "from bsr_data.json";
+            const isStale = !latest; // uploaded data is fresh; JSON fallback might be stale
+            return (
+              <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", lineHeight:1.2 }}>
+                <span style={{ fontSize:8, color:T.textFaint, fontFamily:"'DM Mono',monospace", letterSpacing:1, fontWeight:700 }}>LAST UPDATED</span>
+                <span style={{ fontSize:10, color: isStale ? "#DC2626" : "#059669", fontFamily:"'DM Mono',monospace", fontWeight:700 }}>
+                  {display}
+                </span>
+              </div>
+            );
+          })()}
+          <span style={{ fontSize:10, color:T.textFaint, fontFamily:"'DM Mono',monospace" }}>{filtered.length} ASINs</span>
+        </div>
+      </div>
+
+      {/* Filter Bar — matches Smart View */}
+      <div style={{ background:T.shellBg, borderBottom:`1px solid ${T.border}`, padding:"12px 24px", display:"flex", gap:10, alignItems:"center", flexWrap:"wrap" }}>
+        <div style={{ position:"relative", flex:"0 0 auto" }}>
+          <span style={{ position:"absolute", left:12, top:"50%", transform:"translateY(-50%)", color:T.textFaint, fontSize:13 }}>⌕</span>
+          <input
+            placeholder="Search ASIN, brand, model…"
+            value={bsrSearch}
+            onChange={e=>{setBsrSearch(e.target.value); setBsrPageNum(1);}}
+            style={{ background: bsrSearch?"#EFF6FF":T.surface, border: bsrSearch?"1px solid #3B82F6":`1px solid ${T.border}`, borderRadius:8, color:T.text, padding:"9px 14px 9px 34px", fontSize:12, width:260, outline:"none", transition:"all 0.15s" }}
+          />
+        </div>
+        {/* Brand pill filter */}
+        <div style={{ display:"flex", gap:6, alignItems:"center", padding:"7px 12px", borderRadius:8, background: bsrBrand!=="All" ? "#0F172A" : T.surface, border:`1px solid ${bsrBrand!=="All" ? "#0F172A" : T.border}` }}>
+          <span style={{ fontSize:10, color: bsrBrand!=="All" ? "#94A3B8" : T.textFaint, fontFamily:"'DM Mono',monospace", fontWeight:700, letterSpacing:1 }}>BRAND</span>
+          <select value={bsrBrand} onChange={e=>{setBsrBrand(e.target.value); setBsrPageNum(1);}}
+            style={{ background:"transparent", border:"none", color: bsrBrand!=="All" ? "#fff" : T.text, padding:"1px 20px 1px 2px", fontSize:12, fontWeight:600, outline:"none", appearance:"none", cursor:"pointer", backgroundImage:`url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%2394A3B8' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E")`, backgroundRepeat:"no-repeat", backgroundPosition:"right 4px center" }}>
+            {allBrands.map(b=>(
+              <option key={b} value={b} style={{ color:"#0F172A" }}>{b === "All" ? "All Brands" : b}</option>
+            ))}
+          </select>
+        </div>
+        <div style={{ marginLeft:"auto", display:"flex", gap:8, alignItems:"center" }}>
+          <span style={{ fontSize:11, color: bsrBrand!=="All" ? "#2563EB" : T.textFaint, fontFamily:"'DM Mono',monospace" }}>
+            {filtered.length} rows
+          </span>
+          <div style={{ display:"flex", gap:6, alignItems:"center", padding:"7px 10px", borderRadius:8, background:T.surface, border:`1px solid ${T.border}` }}>
+            <span style={{ fontSize:10, color:T.textFaint, fontFamily:"'DM Mono',monospace", fontWeight:600 }}>SORT</span>
+            <select value={`${sortCol}_${sortDir}`} onChange={e=>{ const [k, d] = e.target.value.split("_"); setSortCol(k); setSortDir(d); setBsrPageNum(1); }}
+              style={{ background:"transparent", border:"none", color:T.text, padding:"1px 20px 1px 2px", fontSize:12, outline:"none", appearance:"none", cursor:"pointer", backgroundImage:`url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%2394A3B8' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E")`, backgroundRepeat:"no-repeat", backgroundPosition:"right 4px center" }}>
+              <option value="bsr_asc">Current Rank ↑</option>
+              <option value="bsr_desc">Current Rank ↓</option>
+              <option value="drops_30d_desc">Footfall (high)</option>
+              <option value="rating_desc">Rating (high)</option>
+              <option value="reviews_desc">Rating Count (high)</option>
+              <option value="monthly_sold_desc">Monthly Sold (high)</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ padding:"16px 24px" }}>
+
+        {/* KPI Strip — clickable cards that act as filters */}
+        <div style={{ display:"flex", gap:10, marginBottom:10, overflowX:"auto", paddingBottom:2 }}>
+          {(() => {
+            const cards = [
+              { key:null,         label:"Total ASINs",         value:stats.total.toLocaleString("en-IN"),                          accent:"#38BDF8", hint:"Show all" },
+              { key:"best",       label:"Best Rank",           value:stats.best ? `#${stats.best.toLocaleString("en-IN")}` : "—", accent:"#10B981", disabled:true },
+              { key:"top1k",      label:"Top 1K",              value:stats.top1k.toLocaleString("en-IN"),                          accent:"#F59E0B" },
+              { key:"rising",     label:"Rising ↑",            value:stats.rising.toLocaleString("en-IN"),                         accent:"#059669" },
+              { key:"falling",    label:"Falling ↓",           value:stats.falling.toLocaleString("en-IN"),                        accent:"#DC2626" },
+              { key:null,         label:"Avg Drops/mo",        value:stats.avgDrops.toLocaleString("en-IN"),                       accent:"#8B5CF6", disabled:true },
+              { key:null,         label:"Total Monthly Sold",  value:stats.totalMonthly.toLocaleString("en-IN"),                   accent:"#EC4899", disabled:true },
+            ];
+            return cards.map((c, i) => {
+              const clickable = c.key !== undefined && !c.disabled;
+              const isActive = clickable && c.key !== null && quickFilter === c.key;
+              const isAll = clickable && c.key === null;
+              const showAsActive = isActive || (isAll && quickFilter === null);
+              return (
+                <div
+                  key={`${c.label}-${i}`}
+                  onClick={clickable ? () => { setQuickFilter(isActive ? null : c.key); setBsrPageNum(1); } : undefined}
+                  style={{
+                    background: T.surface,
+                    border: showAsActive && !isAll ? `1px solid ${c.accent}` : `1px solid ${T.border}`,
+                    boxShadow: showAsActive && !isAll ? `0 0 0 3px ${c.accent}22` : "none",
+                    borderRadius: 10, padding: "10px 16px", minWidth: 140, flex: "0 0 auto",
+                    borderTop: `2px solid ${c.accent}`,
+                    display: "flex", flexDirection: "column", gap: 2,
+                    cursor: clickable ? "pointer" : "default",
+                    opacity: c.disabled ? 0.9 : 1,
+                    transition: "all 0.15s",
+                  }}
+                  title={c.disabled ? "" : (isActive ? "Click to clear filter" : (c.hint || `Filter by ${c.label}`))}
+                >
+                  <div style={{ fontSize:9, color:T.textMuted, fontFamily:"'DM Mono',monospace", letterSpacing:1.2, textTransform:"uppercase", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                    <span>{c.label}</span>
+                    {clickable && !c.disabled && <span style={{ fontSize:8, color: showAsActive ? c.accent : T.textFaint, fontWeight:700 }}>{isActive ? "●" : ""}</span>}
+                  </div>
+                  <div style={{ fontSize:18, fontWeight:800, color:T.text, letterSpacing:-0.5, lineHeight:1.2 }}>{c.value}</div>
+                </div>
+              );
+            });
+          })()}
+        </div>
+
+        {/* Quick filter chips */}
+        <div style={{ display:"flex", gap:6, marginBottom:12, alignItems:"center", flexWrap:"wrap" }}>
+          <span style={{ fontSize:9, color:T.textFaint, fontFamily:"'DM Mono',monospace", fontWeight:700, letterSpacing:1, marginRight:4 }}>QUICK FILTER</span>
+          {[
+            { key:null,         label:"All",            count:stats.total,     color:"#64748B" },
+            { key:"top1k",      label:"🏆 Top 1K",      count:stats.top1k,     color:"#F59E0B" },
+            { key:"rising",     label:"↑ Rising",       count:stats.rising,    color:"#059669" },
+            { key:"falling",    label:"↓ Falling",      count:stats.falling,   color:"#DC2626" },
+            { key:"problem",    label:"⚠ Low Rating",   count:stats.problem,   color:"#EA580C" },
+            { key:"zero_sales", label:"💤 Zero Sales",  count:stats.zeroSales, color:"#9CA3AF" },
+          ].map(chip => {
+            const active = quickFilter === chip.key;
+            return (
+              <button key={chip.label}
+                onClick={() => { setQuickFilter(chip.key); setBsrPageNum(1); }}
+                style={{
+                  padding:"5px 11px", borderRadius:999, fontSize:11, fontWeight:700, cursor:"pointer", transition:"all 0.15s",
+                  background: active ? chip.color : T.surface,
+                  color: active ? "#fff" : T.textSoft,
+                  border: `1px solid ${active ? chip.color : T.border}`,
+                  whiteSpace:"nowrap",
+                }}>
+                {chip.label} <span style={{ opacity:0.75, fontSize:10, marginLeft:3 }}>{chip.count.toLocaleString("en-IN")}</span>
+              </button>
+            );
+          })}
+          {quickFilter !== null && (
+            <button onClick={() => { setQuickFilter(null); setBsrPageNum(1); }}
+              style={{ marginLeft:"auto", padding:"5px 10px", borderRadius:7, fontSize:10, fontWeight:700, cursor:"pointer",
+                       background:T.surfaceSoft, border:`1px solid ${T.border}`, color:T.textMuted }}>
+              ✕ Clear filter
+            </button>
+          )}
+        </div>
+
+        {/* Table */}
+        <div style={{ borderRadius:12, border:`1px solid ${T.border}`, overflow:"hidden", background:T.surface }}>
+          <div style={{ overflowX:"auto", overflowY:"auto", maxHeight:"calc(100vh - 360px)" }}>
+            <table style={{ width:"100%", borderCollapse:"separate", borderSpacing:0, fontSize:12, tableLayout:"fixed", minWidth:1100 }}>
+              <colgroup>
+                {COLUMNS.map(c => <col key={c.key} style={{ width:c.width }} />)}
+              </colgroup>
+              <thead>
+                <tr>
+                  {COLUMNS.map(c => {
+                    const isActive = sortCol === c.key;
+                    const arrow = !c.sortable ? "" : isActive ? (sortDir === "asc" ? " ↑" : " ↓") : " ⇅";
+                    return (
+                      <th
+                        key={c.key}
+                        onClick={c.sortable ? () => handleSort(c.key) : undefined}
+                        style={{
+                          padding:"9px 10px",
+                          textAlign:c.align,
+                          fontSize:10,
+                          fontWeight:700,
+                          color: isActive ? "#2563EB" : T.textMuted,
+                          background: T.headerBg,
+                          borderBottom:`1px solid ${T.border}`,
+                          whiteSpace:"nowrap",
+                          overflow:"hidden",
+                          position:"sticky",
+                          top:0,
+                          zIndex:2,
+                          cursor: c.sortable ? "pointer" : "default",
+                          userSelect:"none",
+                          boxShadow: `inset 0 -1px 0 ${T.border}`,
+                        }}
+                        title={c.sortable ? `Sort by ${c.label}` : ""}
+                      >
+                        {c.label}<span style={{ fontSize:9, opacity: isActive ? 1 : 0.45 }}>{arrow}</span>
+                      </th>
+                    );
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+          {paged.map((row, i) => {
+            const bc   = BRAND_META[row.brand] || { accent:"#6B7280", light:"#F9FAFB", text:"#4B5563" };
+            const tier = getBsrTier(row.bsr);
+            const trendColor = row.trend==="up"?"#059669":row.trend==="down"?"#DC2626":"#9CA3AF";
+            const trendLabel = row.trend==="up"?"↑ Improving":row.trend==="down"?"↓ Declining":"→ Stable";
+            const footfallColor = (row.drops_30d||0)>=20?"#059669":(row.drops_30d||0)>=8?"#D97706":"#DC2626";
+            const footfallLabel = (row.drops_30d||0)>=20?"sells daily":(row.drops_30d||0)>=8?"few/week":"slow";
+            const stars = row.rating ? Math.round(row.rating) : 0;
+            const globalRank = (curPage-1)*PAGE_SIZE + i + 1;
+            return (
+              <tr key={row.asin}
+                onClick={()=>setModalRow(row)}
+                onDoubleClick={()=>{ setModalRow(null); setFullPageRow(row); }}
+                style={{ borderBottom:`1px solid ${T.surfaceSoft}`, background:i%2===0?T.surface:T.surfaceSoft, cursor:"pointer" }}>
+
+                {/* # */}
+                <td style={{ padding:"9px 8px", fontSize:10, color:T.textFaint, fontWeight:600 }}>{globalRank}</td>
+
+                {/* ASIN */}
+                <td style={{ padding:"9px 10px" }}>
+                  <span style={{ fontFamily:"'DM Mono',monospace", fontSize:11, color:"#2563EB", fontWeight:700 }}>{row.asin}</span>
+                </td>
+
+                {/* Brand */}
+                <td style={{ padding:"9px 10px" }}>
+                  <span style={{ background:bc.light, color:bc.text, borderRadius:20, padding:"2px 8px", fontSize:10, fontWeight:700, whiteSpace:"nowrap" }}>{row.brand}</span>
+                </td>
+
+                {/* Current Rank */}
+                <td style={{ padding:"9px 10px" }}>
+                  <div style={{ fontSize:13, fontWeight:800, color:tier.color, fontFamily:"monospace" }}>#{row.bsr.toLocaleString("en-IN")}</div>
+                  <div style={{ fontSize:9, color:tier.color, fontWeight:600, marginTop:1 }}>{tier.emoji} {tier.label}</div>
+                </td>
+
+                {/* Trend */}
+                <td style={{ padding:"9px 10px" }}>
+                  <span style={{ fontSize:11, fontWeight:700, color:trendColor }}>{trendLabel}</span>
+                </td>
+
+                {/* Rating */}
+                <td style={{ padding:"9px 10px" }}>
+                  <div style={{ display:"flex", gap:1, alignItems:"center" }}>
+                    {[1,2,3,4,5].map(s=>(
+                      <div key={s} style={{ width:9, height:9, background:s<=stars?"#F59E0B":"#E5E7EB", clipPath:"polygon(50% 0%,61% 35%,98% 35%,68% 57%,79% 91%,50% 70%,21% 91%,32% 57%,2% 35%,39% 35%)", flexShrink:0 }} />
+                    ))}
+                    <span style={{ fontSize:11, fontWeight:700, color:T.text, marginLeft:3 }}>{row.rating||"—"}</span>
+                  </div>
+                </td>
+
+                {/* Reviews */}
+                <td style={{ padding:"9px 10px", fontSize:12, fontWeight:700, color:T.text }}>
+                  {row.reviews?.toLocaleString("en-IN")||"—"}
+                </td>
+
+                {/* 30d avg rank */}
+                <td style={{ padding:"9px 10px", fontSize:12, fontWeight:700, color:T.textSoft, fontFamily:"monospace" }}>
+                  {row.bsr_30d ? `#${row.bsr_30d.toLocaleString("en-IN")}` : "—"}
+                </td>
+
+                {/* Footfall */}
+                <td style={{ padding:"9px 10px" }}>
+                  <span style={{ fontSize:11, fontWeight:700, color:footfallColor }}>{row.drops_30d} drops</span>
+                  <span style={{ fontSize:9, color:T.textMuted, marginLeft:4 }}>({footfallLabel})</span>
+                </td>
+
+                {/* Monthly Sold */}
+                <td style={{ padding:"9px 10px", fontSize:12, fontWeight:700, color:T.text }}>
+                  {row.monthly_sold ? `${row.monthly_sold}+` : "—"}
+                </td>
+              </tr>
+            );
+          })}
+          {paged.length === 0 && (
+            <tr><td colSpan={10} style={{ padding:40, textAlign:"center", color:T.textMuted, fontSize:13 }}>No ASINs match your filters</td></tr>
+          )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Fixed Bottom toolbar: Uploads · Export · Pagination */}
+        <div style={{ position:"fixed", left:0, right:0, bottom:0, zIndex:90,
+                      padding:"10px 24px", borderTop:`1px solid ${T.border}`,
+                      display:"flex", alignItems:"center", gap:12, flexWrap:"wrap",
+                      background:T.surface, boxShadow:"0 -4px 14px rgba(15,23,42,0.06)" }}>
+          {/* Upload buttons per brand */}
+          <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
+            <span style={{ fontSize:9, color:T.textFaint, fontFamily:"'DM Mono',monospace", fontWeight:700, letterSpacing:1 }}>UPLOAD KEEPA CSV</span>
+            {["Audio Array","Nexlev","Tonor","White Mulberry"].map(b => {
+              const bc = BRAND_META[b] || { accent:"#6B7280", light:"#F9FAFB", text:"#4B5563" };
+              const uploaded = !!uploadedData[b];
+              return (
+                <label key={b}
+                  style={{ display:"inline-flex", alignItems:"center", gap:5, padding:"5px 10px", borderRadius:7, fontSize:10, fontWeight:700, cursor:"pointer",
+                           background: uploaded ? bc.light : T.surface,
+                           border: `1px solid ${uploaded ? bc.accent : T.border}`,
+                           color: uploaded ? bc.text : T.textSoft,
+                           transition:"all 0.15s", whiteSpace:"nowrap" }}
+                  title={uploaded ? `${b} replaced with uploaded data — refresh to reset` : `Upload ${b} Keepa CSV`}>
+                  <span style={{ fontSize:11 }}>{uploaded ? "✓" : "↑"}</span> {b}
+                  <input type="file" accept=".csv" style={{ display:"none" }}
+                    onChange={e => {
+                      handleBrandUpload(b, e.target.files?.[0]);
+                      e.target.value = ""; // allow re-upload of same file
+                    }} />
+                </label>
+              );
+            })}
+          </div>
+
+          {/* Export */}
+          <button onClick={exportCsv}
+            style={{ background:T.panelBg, border:`1px solid ${T.border}`, borderRadius:7, padding:"6px 12px", fontSize:11, color:T.textSoft, fontWeight:700, cursor:"pointer", whiteSpace:"nowrap" }}>
+            📥 Export CSV
+          </button>
+
+          {/* Pagination — pushed to the right */}
+          {totalPages > 1 && (
+            <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:14 }}>
+              <button onClick={()=>setBsrPageNum(p=>Math.max(1,p-1))} disabled={curPage===1}
+                style={{ border:`1px solid ${T.border}`, borderRadius:8, padding:"6px 14px", fontSize:11, background:T.surface, color:T.text, cursor:curPage===1?"not-allowed":"pointer", opacity:curPage===1?0.4:1, fontWeight:700 }}>← Prev</button>
+              <span style={{ fontSize:12, color:T.textSoft, fontFamily:"'DM Mono',monospace" }}>
+                Page {curPage} of {totalPages}
+              </span>
+              <button onClick={()=>setBsrPageNum(p=>Math.min(totalPages,p+1))} disabled={curPage===totalPages}
+                style={{ border:`1px solid ${T.border}`, borderRadius:8, padding:"6px 14px", fontSize:11, background:T.surface, color:T.text, cursor:curPage===totalPages?"not-allowed":"pointer", opacity:curPage===totalPages?0.4:1, fontWeight:700 }}>Next →</button>
+            </div>
+          )}
+        </div>
+
+        {/* Spacer so table bottom doesn't hide behind fixed toolbar */}
+        <div style={{ height:60 }} />
+
+        {/* Toast notification */}
+        {toast && (
+          <div style={{ position:"fixed", bottom:80, right:24, zIndex:999,
+                        background: toast.type === "success" ? "#059669" : "#DC2626",
+                        color:"#fff", padding:"10px 16px", borderRadius:10,
+                        fontSize:12, fontWeight:700, boxShadow:"0 8px 24px rgba(0,0,0,0.15)",
+                        animation:"slideInUp 0.2s ease-out" }}>
+            {toast.msg}
+          </div>
+        )}
+        <style>{`@keyframes slideInUp { from { transform:translateY(20px); opacity:0; } to { transform:translateY(0); opacity:1; } }`}</style>
+      </div>
+    </div>
+  );
 }
 
 export default function Dashboard() {
@@ -699,6 +2057,7 @@ export default function Dashboard() {
   const [ctTop10MonthMode, setCtTop10MonthMode] = useState("selected");
   const [ctSearch, setCtSearch] = useState("");
   const [smartViewPage, setSmartViewPage] = useState(false);
+  const [bsrPage, setBsrPage] = useState(false);
   const [tablePage, setTablePage] = useState(1);
   const [isSearchPending, startT] = useTransition();
   const timer               = useRef(null);
@@ -760,8 +2119,13 @@ export default function Dashboard() {
         const nextTab = smartViewMatch[1] || SMART_VIEW_TABS[0].key;
         setSmartViewPage(true);
         setSmartViewTab(nextTab);
+        setBsrPage(false);
+      } else if (hash === "#bsr-tracker") {
+        setBsrPage(true);
+        setSmartViewPage(false);
       } else {
         setSmartViewPage(false);
+        setBsrPage(false);
       }
     };
 
@@ -806,12 +2170,9 @@ export default function Dashboard() {
       if (seen.has(key)) continue;
       seen.add(key);
       const m = masterData[r.ASIN];
-      if (!m) {
-        out.push(r);
-      } else {
+      let row = r;
+      if (m) {
         // Merge master data but never overwrite a populated field with a blank/null value.
-        // This prevents the hardcoded ASIN_MASTER from blanking out category/mainCat that
-        // came from raw_data.json for ASINs that are only partially in the master.
         const merged = Object.assign(Object.create(null), r);
         for (const k of Object.keys(m)) {
           const mv = m[k];
@@ -821,8 +2182,20 @@ export default function Dashboard() {
             merged[k] = mv;
           }
         }
-        out.push(merged);
+        row = merged;
       }
+      // ── Force-recompute ACOS and TACOS from raw values ──────────────────
+      // This overrides any precomputed (and potentially buggy) values from raw_data.json.
+      // ACOS  = AdSpend / AdSales
+      // TACOS = AdSpend / TotalNetSales  (Net Sales already includes ad sales + organic)
+      const adSpend = row.TotalAdsSpend || 0;
+      const adSales = row.TotalAdsSales || 0;
+      const netSales = row.TotalNetSalesValue || 0;
+      row = Object.assign(Object.create(null), row, {
+        ACOS:  adSales > 0  ? adSpend / adSales  : 0,
+        TACOS: netSales > 0 ? adSpend / netSales : 0,
+      });
+      out.push(row);
     }
     return out;
 
@@ -982,7 +2355,7 @@ export default function Dashboard() {
         NetUnits:            row.Units3P || 0,
         TotalNetSalesValue:  row.Rev3P   || 0,
         ACOS:                (row.TotalAdsSales||0) > 0 ? (row.TotalAdsSpend||0)/(row.TotalAdsSales||0) : 0,
-        TACOS:               ((row.Rev3P||0)+(row.TotalAdsSales||0)) > 0 ? (row.TotalAdsSpend||0)/((row.Rev3P||0)+(row.TotalAdsSales||0)) : 0,
+        TACOS:               (row.Rev3P||0) > 0 ? (row.TotalAdsSpend||0)/(row.Rev3P||0) : 0,
         OrganiSales:         Math.max(0,(row.Rev3P||0)-(row.TotalAdsSales||0)),
         OrganicPct:          (row.Rev3P||0) > 0 ? Math.max(0,(row.Rev3P||0)-(row.TotalAdsSales||0))/(row.Rev3P||0) : 0,
         ConversionPct:       (row.Sessions||0) > 0 ? (row.Units3P||0)/row.Sessions : 0,
@@ -1112,7 +2485,7 @@ export default function Dashboard() {
   }, { sessions:0, units:0, sales:0, spend:0, adsSales:0, orders:0 }), [filtered, dataMode]);
 
   const avgAcos  = totals.adsSales > 0 ? totals.spend / totals.adsSales : 0;
-  const avgTacos = (totals.sales + totals.adsSales) > 0 ? totals.spend / (totals.sales + totals.adsSales) : 0;
+  const avgTacos = totals.sales > 0 ? totals.spend / totals.sales : 0;
   const activeFilterCount = [brand.length > 0 ? "b" : "", month.length > 0 ? "m" : "", cat.length > 0 ? "c" : "", debSearch].filter(Boolean).length;
 
   // Prev month totals for trend indicators
@@ -1242,6 +2615,10 @@ export default function Dashboard() {
     window.print();
     setShowExportMenu(false);
   };
+
+  if (bsrPage) {
+    return <BsrTrackerPage onBack={() => { window.location.hash = ""; }} />;
+  }
 
   if (smartViewPage) {
     return (
@@ -2046,7 +3423,7 @@ export default function Dashboard() {
         OrganiSales: sum("OrganiSales"),
         BuyboxPct: wavg("BuyboxPct","Sessions"),
         ACOS: adSales > 0 ? adSpend / adSales : 0,
-        TACOS: (netSales + adSales) > 0 ? adSpend / (netSales + adSales) : 0,
+        TACOS: netSales > 0 ? adSpend / netSales : 0,
         CAC: amsOrders > 0 ? adSpend / amsOrders : 0,
         ConversionPct: sum("Sessions") > 0 ? sum("NetUnits") / sum("Sessions") : 0,
         OrganicPct: netSales > 0 ? Math.max(0, netSales - adSales) / netSales : 0,
@@ -2085,7 +3462,7 @@ export default function Dashboard() {
     const totImpr     = filteredByMonth.reduce((a,r) => a + r.Impressions, 0);
     const totSessions = filteredByMonth.reduce((a,r) => a + r.Sessions, 0);
     const overallACOS  = totAdSales  > 0 ? totAdSpend / totAdSales  : 0;
-    const overallTACOS = (totNetSales + totAdSales) > 0 ? totAdSpend / (totNetSales + totAdSales) : 0;
+    const overallTACOS = totNetSales > 0 ? totAdSpend / totNetSales : 0;
     const overallCAC   = totOrders   > 0 ? totAdSpend / totOrders   : 0;
     const overallBB    = filteredByMonth.reduce((a,r,_,arr) => a + r.BuyboxPct / arr.length, 0);
 
@@ -2686,6 +4063,22 @@ export default function Dashboard() {
             }}
           >
             Smart View
+          </button>
+          <button
+            onClick={() => { window.location.hash = "bsr-tracker"; }}
+            style={{
+              border:"none",
+              borderBottom: bsrPage ? "2px solid #8B5CF6" : "2px solid transparent",
+              background:THEME.surface,
+              color: bsrPage ? "#7C3AED" : THEME.textMuted,
+              fontSize:11,
+              fontWeight:700,
+              cursor:"pointer",
+              padding:"7px 14px",
+              borderRadius:0,
+            }}
+          >
+            📊 BSR Tracker
           </button>
           <button
             onClick={() => openComparePage(activeCompareAsin)}

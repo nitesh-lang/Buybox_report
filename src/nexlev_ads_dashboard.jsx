@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useCallback, useTransition, useRef, useEffect, useDeferredValue } from "react";
 import RAW_DATA from "./raw_data.json";
 import BSR_RAW from "./bsr_data.json";
+import BSR_SNAPSHOTS from "./bsr_snapshots.json";
 
 // ── ASIN Master: FBA SKU · Model · Category · DP · NLC ──────────────────────
 const ASIN_MASTER = {
@@ -208,10 +209,7 @@ const THEME = {
 
 // ── Column definitions ─────────────────────────────────────────────────────
 const COLS = [
-  { key:"ASIN",            label:"ASIN",           fmt:"str",   w:132 },
-  { key:"Month",           label:"Mo",             fmt:"month", w:54  },
-  { key:"Image",           label:"",               fmt:"image", w:44  },
-  { key:"Title",           label:"Title",          fmt:"title", w:220 },
+  { key:"ASIN",            label:"ASIN",           fmt:"str",  w:132 },
   { key:"fbaSku",          label:"FBA SKU",        fmt:"str",  w:90,  master:true },
   { key:"model",           label:"Model",          fmt:"str",  w:72,  master:true },
   { key:"category",        label:"Category",       fmt:"str",  w:130, master:true },
@@ -234,7 +232,7 @@ const COLS = [
   { key:"OrganicPct",      label:"Organic%",       fmt:"pct",  w:84  },
 ];
 
-const STICKY_COLUMN_COUNT = 3; // ASIN, Month, Image — stay pinned left
+const STICKY_COLUMN_COUNT = 4;
 const STICKY_LEFT_OFFSETS = COLS.slice(0, STICKY_COLUMN_COUNT).reduce((acc, col, index) => {
   acc[col.key] = COLS.slice(0, index).reduce((sum, current) => sum + current.w, 0);
   return acc;
@@ -1427,15 +1425,16 @@ const formatDateShort = (iso) => {
   const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
   return `${parseInt(d,10)} ${months[parseInt(m,10)-1]}`;
 };
+// Load snapshots — PRIMARY source is baked-in BSR_SNAPSHOTS (from build_bsr_snapshots.py).
+// This means every team member sees the same data automatically after each git push.
+// localStorage is no longer used (upload buttons removed).
 const loadSnapshots = () => {
   try {
-    const raw = localStorage.getItem(BSR_STORAGE_KEY);
-    return raw ? JSON.parse(raw) : {};
+    return BSR_SNAPSHOTS || {};
   } catch { return {}; }
 };
-const saveSnapshots = (snaps) => {
-  try { localStorage.setItem(BSR_STORAGE_KEY, JSON.stringify(snaps)); } catch {}
-};
+// Kept as no-op stub so any remaining references don't crash; we never write snapshots anymore.
+const saveSnapshots = (_snaps) => {};
 // Detect brand from filename: "Audio Array_BSR.csv" -> "Audio Array"
 const detectBrandFromFilename = (filename) => {
   const name = filename.toLowerCase();
@@ -1486,119 +1485,6 @@ const ASIN_TITLE_MAP = (() => {
   } catch {}
   return map;
 })();
-
-// ── ASIN → Image URL lookup from latest BSR snapshot (updated whenever user uploads)
-// Called on-demand; reads localStorage so it reflects current uploads.
-const getAsinImageMap = () => {
-  const map = {};
-  try {
-    const snaps = JSON.parse(localStorage.getItem("bsr_daily_snapshots_v1") || "{}");
-    // Use most recent date
-    const dates = Object.keys(snaps).sort().reverse();
-    if (dates.length === 0) return map;
-    const latest = snaps[dates[0]];
-    Object.values(latest || {}).forEach(rows => {
-      (rows || []).forEach(r => {
-        if (r.asin && r.image && !map[r.asin]) map[r.asin] = r.image;
-      });
-    });
-  } catch {}
-  return map;
-};
-
-// ── Month ordering helpers (for MoM trend arrows) ───────────────────────────
-const MONTH_ORDER = { Jan:1, Feb:2, Mar:3, Apr:4, May:5, Jun:6, Jul:7, Aug:8, Sep:9, Oct:10, Nov:11, Dec:12 };
-
-// Build MoM delta map: { "ASIN|Month" : { NetSales: +12.3, NetUnits: -5.1, BuyboxPct: +2.0 } }
-// For each row, looks up the SAME ASIN in the PRIOR month and computes % change.
-const MOM_DELTA_MAP = (() => {
-  const map = {};
-  try {
-    // Group by ASIN
-    const byAsin = {};
-    RAW_DATA.forEach(r => {
-      if (!r.ASIN || !r.Month) return;
-      (byAsin[r.ASIN] ||= []).push(r);
-    });
-    // For each ASIN, sort by month and compute vs previous month
-    Object.values(byAsin).forEach(rows => {
-      rows.sort((a, b) => (MONTH_ORDER[a.Month]||0) - (MONTH_ORDER[b.Month]||0));
-      for (let i = 1; i < rows.length; i++) {
-        const cur = rows[i], prev = rows[i-1];
-        // Only compare consecutive months (skip Jan→Mar if Feb missing)
-        if ((MONTH_ORDER[cur.Month]||0) - (MONTH_ORDER[prev.Month]||0) !== 1) continue;
-        const key = `${cur.ASIN}|${cur.Month}`;
-        const pct = (c, p) => (p && p !== 0) ? ((c - p) / Math.abs(p)) * 100 : null;
-        map[key] = {
-          NetSales:         pct(cur.TotalNetSalesValue, prev.TotalNetSalesValue),
-          NetUnits:         pct(cur.NetUnits, prev.NetUnits),
-          BuyboxPct:        (cur.BuyboxPct != null && prev.BuyboxPct != null) ? (cur.BuyboxPct - prev.BuyboxPct) : null,
-          Sessions:         pct(cur.Sessions, prev.Sessions),
-          TotalAdsSpend:    pct(cur.TotalAdsSpend, prev.TotalAdsSpend),
-          TotalAdsSales:    pct(cur.TotalAdsSales, prev.TotalAdsSales),
-          ACOS:             (cur.ACOS != null && prev.ACOS != null) ? (cur.ACOS - prev.ACOS) : null,
-          TACOS:            (cur.TACOS != null && prev.TACOS != null) ? (cur.TACOS - prev.TACOS) : null,
-        };
-      }
-    });
-  } catch {}
-  return map;
-})();
-
-// ── Row-level alert detection — returns { level, reasons[] }
-// level: null | "watch" | "urgent"
-// urgent: BuyBox<50%, or ACOS>60% with real spend, or zero sales with >1000 sessions
-// watch:  BuyBox<70%, ACOS>40%, TACOS>30%, OR Organic% falling hard
-const getRowAlert = (row) => {
-  const reasons = [];
-  let level = null;
-  const bb = row.BuyboxPct;
-  const acos = row.ACOS;
-  const tacos = row.TACOS;
-  const sessions = row.Sessions || 0;
-  const units = row.NetUnits || 0;
-  const spend = row.TotalAdsSpend || 0;
-
-  if (bb != null && bb > 0 && bb < 50) {
-    reasons.push(`Buybox ${bb.toFixed(1)}%`);
-    level = "urgent";
-  } else if (bb != null && bb > 0 && bb < 70) {
-    reasons.push(`Buybox ${bb.toFixed(1)}%`);
-    level = level || "watch";
-  }
-  if (acos != null && acos > 60 && spend > 5000) {
-    reasons.push(`ACOS ${acos.toFixed(1)}%`);
-    level = "urgent";
-  } else if (acos != null && acos > 40 && spend > 1000) {
-    reasons.push(`ACOS ${acos.toFixed(1)}%`);
-    level = level || "watch";
-  }
-  if (tacos != null && tacos > 30) {
-    reasons.push(`TACOS ${tacos.toFixed(1)}%`);
-    level = level || "watch";
-  }
-  if (sessions > 1000 && units === 0) {
-    reasons.push(`${sessions.toLocaleString('en-IN')} sessions · 0 sales`);
-    level = "urgent";
-  }
-  return { level, reasons };
-};
-
-// Month badge color
-const MONTH_COLORS = {
-  Jan: { bg:"#EFF6FF", text:"#1D4ED8" },
-  Feb: { bg:"#F0FDF4", text:"#16A34A" },
-  Mar: { bg:"#FEF3C7", text:"#D97706" },
-  Apr: { bg:"#FCE7F3", text:"#BE185D" },
-  May: { bg:"#E0E7FF", text:"#4338CA" },
-  Jun: { bg:"#ECFEFF", text:"#0E7490" },
-  Jul: { bg:"#F5F3FF", text:"#6D28D9" },
-  Aug: { bg:"#FEE2E2", text:"#B91C1C" },
-  Sep: { bg:"#E0F2FE", text:"#0369A1" },
-  Oct: { bg:"#FFEDD5", text:"#C2410C" },
-  Nov: { bg:"#F3E8FF", text:"#7E22CE" },
-  Dec: { bg:"#DBEAFE", text:"#1E40AF" },
-};
 
 // ── Compact Keepa-style hover popup: BSR + Rating + Reviews on one card ────
 function BsrHoverChart({ row, x, y, title }) {
@@ -2542,19 +2428,6 @@ function BsrTrackerPage({ onBack }) {
         />
       )}
 
-      {/* ── Upload date picker dialog ─────────────────────────────────── */}
-      {pendingUpload && (
-        <UploadDatePicker
-          pendingUpload={pendingUpload}
-          existingDates={new Set(availableDates)}
-          onCancel={() => setPendingUpload(null)}
-          onConfirm={(chosenDates) => {
-            processUploadForDates(pendingUpload.filesByDate, chosenDates);
-            setPendingUpload(null);
-          }}
-        />
-      )}
-
       {/* Top Header — matches Smart View */}
       <div style={{ background:T.surface, borderBottom:`1px solid ${T.border}`, padding:"0 24px", display:"flex", alignItems:"center", justifyContent:"space-between", minHeight:64 }}>
         <div style={{ display:"flex", alignItems:"center", gap:10 }}>
@@ -2588,47 +2461,9 @@ function BsrTrackerPage({ onBack }) {
         </div>
       </div>
 
-      {/* ── DAILY SNAPSHOTS CALENDAR BAR ─────────────────────────────────── */}
+      {/* ── DAILY SNAPSHOTS CALENDAR BAR (view-only — data baked in from repo) ── */}
       <div style={{ background:T.surface, borderBottom:`1px solid ${T.border}`, padding:"10px 24px" }}>
         <div style={{ display:"flex", gap:12, alignItems:"center", flexWrap:"wrap" }}>
-
-          {/* Refresh / Upload Today's Data (folder or multi-file) */}
-          <label style={{
-            display:"inline-flex", alignItems:"center", gap:6,
-            background:"linear-gradient(135deg,#2563EB,#1D4ED8)", color:"#fff",
-            padding:"8px 14px", borderRadius:8, fontSize:11, fontWeight:700,
-            cursor:"pointer", boxShadow:"0 2px 6px rgba(37,99,235,0.3)", whiteSpace:"nowrap"
-          }} title="Select a folder containing all 4 brand CSVs, or pick multiple CSV files at once. Files are auto-matched to brand by filename.">
-            <span style={{ fontSize:13 }}>📁</span> Refresh Today's Data
-            <input type="file" accept=".csv" multiple
-              webkitdirectory=""
-              directory=""
-              style={{ display:"none" }}
-              onChange={e => {
-                handleFolderUpload(e.target.files);
-                e.target.value = "";
-              }}
-            />
-          </label>
-
-          {/* Multi-file pick (fallback for folder-blocked browsers) */}
-          <label style={{
-            display:"inline-flex", alignItems:"center", gap:6,
-            background:T.surface, color:T.textSoft, border:`1px solid ${T.border}`,
-            padding:"8px 12px", borderRadius:8, fontSize:11, fontWeight:700,
-            cursor:"pointer", whiteSpace:"nowrap"
-          }} title="Pick multiple CSVs at once (Ctrl+click / Shift+click).">
-            <span style={{ fontSize:13 }}>📄</span> Pick Files
-            <input type="file" accept=".csv" multiple
-              style={{ display:"none" }}
-              onChange={e => {
-                handleFolderUpload(e.target.files);
-                e.target.value = "";
-              }}
-            />
-          </label>
-
-          <div style={{ width:1, height:28, background:T.border }} />
 
           {/* ── Date picker group ─────────────────────────────────────── */}
           <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
@@ -2726,7 +2561,7 @@ function BsrTrackerPage({ onBack }) {
 
             {/* Record count badge */}
             <span style={{ fontSize:10, color:T.textFaint, fontFamily:"'DM Mono',monospace", fontWeight:700 }}>
-              {availableDates.length} {availableDates.length === 1 ? "date" : "dates"} saved
+              {availableDates.length} {availableDates.length === 1 ? "date" : "dates"} available
             </span>
           </div>
         </div>
@@ -3501,9 +3336,6 @@ export default function Dashboard() {
   const totalPages = Math.max(1, Math.ceil(visibleRows.length / TABLE_PAGE_SIZE));
   const currentPage = Math.min(tablePage, totalPages);
   const pagedRows = visibleRows.slice((currentPage - 1) * TABLE_PAGE_SIZE, currentPage * TABLE_PAGE_SIZE).map(applyDataMode);
-
-  // ASIN → Image URL (from latest BSR snapshot in localStorage). Recomputed on mount.
-  const asinImageMap = useMemo(() => getAsinImageMap(), []);
   const rankingMetricKey = useMemo(() => {
     const currentCol = COLS.find((column) => column.key === sortKey);
     return currentCol && currentCol.fmt !== "str" && currentCol.fmt !== "title" ? sortKey : "TotalNetSalesValue";
@@ -3561,18 +3393,11 @@ export default function Dashboard() {
     const col = COLS.find((column) => column.key === sortKey);
     const isMaster = col?.master;
     return [...smartViewRows].sort((a, b) => {
-      // Special handling for Month column: use calendar order, not alphabet
-      if (sortKey === "Month") {
-        const av = MONTH_ORDER[a.Month] || 0;
-        const bv = MONTH_ORDER[b.Month] || 0;
-        return compareValues(av, bv, sortDir);
-      }
       const av = isMaster ? getMasterValue(a, sortKey) : (a[sortKey] ?? null);
       const bv = isMaster ? getMasterValue(b, sortKey) : (b[sortKey] ?? null);
       return compareValues(av, bv, sortDir);
     }).map(applyDataMode);
   }, [smartViewRows, sortKey, sortDir, dataMode]);
-
   const smartViewTotals = useMemo(() => smartViewRows.reduce((acc, row) => ({
     rows: acc.rows + 1,
     sales: acc.sales + (row.TotalNetSalesValue ?? 0),
@@ -3809,22 +3634,22 @@ export default function Dashboard() {
         </div>
 
         <div style={{ padding:"0 24px 32px", overflowX:"auto" }}>
-          <div style={{ borderRadius:12, border:`1px solid ${THEME.border}`, overflow:"hidden", minWidth:2100, background:THEME.surface, boxShadow:"0 4px 16px rgba(15,23,42,0.04)" }}>
+          <div style={{ borderRadius:12, border:`1px solid ${THEME.border}`, overflow:"hidden", minWidth:1800, background:THEME.surface, boxShadow:"0 4px 16px rgba(15,23,42,0.04)" }}>
             <div style={{ overflow:"auto", maxHeight:"calc(100vh - 310px)" }}>
               <table style={{ width:"100%", borderCollapse:"collapse", fontSize:11.5 }}>
                 <thead>
                   <tr style={{ background:THEME.headerBg }}>
                     {COLS.map((col) => (
-                      <th key={col.key} onClick={() => { if (col.fmt !== "image") handleSort(col.key); }} style={{
+                      <th key={col.key} onClick={()=>handleSort(col.key)} style={{
                         padding:"10px 10px",
-                        textAlign: (col.fmt==="str"||col.fmt==="title"||col.fmt==="month"||col.fmt==="image")?"left":"right",
+                        textAlign: col.fmt==="str"||col.fmt==="title"?"left":"right",
                         color: sortKey===col.key ? "#1D4ED8" : THEME.headerText,
                         fontFamily:"'DM Mono',monospace",
                         fontSize:9.5,
                         fontWeight:500,
                         letterSpacing:0.7,
                         textTransform:"uppercase",
-                        cursor: col.fmt === "image" ? "default" : "pointer",
+                        cursor:"pointer",
                         whiteSpace:"nowrap",
                         userSelect:"none",
                         minWidth:col.w,
@@ -3847,53 +3672,25 @@ export default function Dashboard() {
                 <tbody>
                   {smartViewSortedRows.map((row, index) => {
                     const rowBackground = index % 2 === 0 ? THEME.surface : THEME.panelBg;
-                    const alert = getRowAlert(row);
-                    const alertBorder = alert.level === "urgent"
-                      ? "3px solid #DC2626"
-                      : alert.level === "watch"
-                      ? "3px solid #F59E0B"
-                      : "3px solid transparent";
-                    const rowImg = asinImageMap[row.ASIN];
-                    const momKey = `${row.ASIN}|${row.Month}`;
-                    const mom = MOM_DELTA_MAP[momKey] || {};
                     return (
-                      <tr key={`${row.Brand}-${row.ASIN}-${row.Month}`} style={{
-                        borderBottom:"1px solid #F1F5F9",
-                        background: alert.level === "urgent" ? "#FEF2F2" : rowBackground,
-                        borderLeft: alertBorder,
-                      }}>
+                      <tr key={`${row.Brand}-${row.ASIN}-${row.Month}`} style={{ borderBottom:"1px solid #F1F5F9", background:rowBackground }}>
                         {COLS.map((col) => {
                           const v = col.master ? getMasterValue(row, col.key) : row[col.key];
                           const disp = fmtCell(row, col);
                           const isPct = col.fmt === "pct";
                           const accentColor = isPct ? pctColor(col.key, v) : col.key === "Title" ? THEME.text : THEME.textSoft;
                           const isEmpty = v === null || v === undefined || v === 0 || v === "";
-
-                          // MoM delta for this cell (if key has a delta computed)
-                          const delta = mom[col.key];
-                          // For ACOS/TACOS, lower is better so invert
-                          const lowerBetter = col.key === "ACOS" || col.key === "TACOS";
-                          const deltaColor = delta == null || Math.abs(delta) < 0.5
-                            ? "#94A3B8"
-                            : (lowerBetter ? (delta < 0) : (delta > 0))
-                              ? "#059669" : "#DC2626";
-                          const deltaArrow = delta == null || Math.abs(delta) < 0.5
-                            ? "→"
-                            : (delta > 0 ? "↑" : "↓");
-
                           return (
                             <td key={col.key} style={{
-                              padding: col.fmt === "image" ? "3px 4px" : "5px 10px",
-                              textAlign: (col.fmt==="str"||col.fmt==="title"||col.fmt==="month"||col.fmt==="image")?"left":"right",
+                              padding:"5px 10px",
+                              textAlign: col.fmt==="str"||col.fmt==="title"?"left":"right",
                               fontFamily: col.key==="ASIN"||col.key==="fbaSku"||col.key==="model" ? "'DM Mono',monospace" : "inherit",
                               fontSize: col.key==="ASIN" ? 12 : col.key==="fbaSku" ? 10.8 : 11.5,
-                              maxWidth: col.fmt==="title" ? 220 : col.fmt==="image" ? 44 : undefined,
+                              maxWidth: col.fmt==="title" ? 140 : undefined,
                               overflow:"hidden",
                               textOverflow:"ellipsis",
                               whiteSpace:"nowrap",
-                              background: STICKY_LEFT_OFFSETS[col.key] !== undefined
-                                ? (alert.level === "urgent" ? "#FEF2F2" : rowBackground)
-                                : col.master ? (isEmpty ? THEME.surfaceMuted : "#F0F4FF") : "transparent",
+                              background: STICKY_LEFT_OFFSETS[col.key] !== undefined ? rowBackground : col.master ? (isEmpty ? THEME.surfaceMuted : "#F0F4FF") : "transparent",
                               color: isEmpty ? "#CBD5E1" : col.key==="ASIN" ? "#1D4ED8" : accentColor,
                               letterSpacing: col.key==="ASIN" ? 0.3 : 0,
                               fontWeight: col.key==="ASIN" ? 800 : col.key==="model" ? 600 : col.key==="TotalNetSalesValue" ? 700 : col.key==="dp" ? 600 : 400,
@@ -3901,73 +3698,13 @@ export default function Dashboard() {
                               left: STICKY_LEFT_OFFSETS[col.key],
                               zIndex: STICKY_LEFT_OFFSETS[col.key] !== undefined ? 4 : 1,
                               borderRight: STICKY_LEFT_OFFSETS[col.key] !== undefined ? `1px solid ${THEME.border}` : undefined,
-                              boxShadow: STICKY_LEFT_OFFSETS[col.key] === STICKY_LEFT_OFFSETS.Image ? THEME.stickyShadow : undefined,
+                              boxShadow: STICKY_LEFT_OFFSETS[col.key] === STICKY_LEFT_OFFSETS.category ? THEME.stickyShadow : undefined,
                             }}>
-                              {/* ── Image column ─────────────────────── */}
-                              {col.fmt === "image" ? (
-                                rowImg ? (
-                                  <img src={rowImg} alt="" loading="lazy"
-                                    onError={(e) => { e.currentTarget.style.display = "none"; }}
-                                    style={{ width:34, height:34, objectFit:"contain", borderRadius:4, background:"#F9FAFB", border:`1px solid ${THEME.border}` }} />
-                                ) : (
-                                  <div style={{ width:34, height:34, borderRadius:4, background:THEME.surfaceMuted, border:`1px dashed ${THEME.border}`, display:"inline-flex", alignItems:"center", justifyContent:"center", fontSize:12, color:THEME.textFaint }}>📦</div>
-                                )
-                              )
-                              /* ── Month column — colored pill ─────── */
-                              : col.fmt === "month" ? (
-                                (() => {
-                                  const m = row.Month;
-                                  const c = MONTH_COLORS[m] || { bg:"#F3F4F6", text:"#374151" };
-                                  return (
-                                    <span style={{
-                                      display:"inline-block",
-                                      background: c.bg,
-                                      color: c.text,
-                                      padding:"2px 8px",
-                                      borderRadius:12,
-                                      fontSize:10,
-                                      fontWeight:800,
-                                      letterSpacing:0.4,
-                                      fontFamily:"'DM Mono',monospace",
-                                    }}>
-                                      {m || "—"}
-                                    </span>
-                                  );
-                                })()
-                              )
-                              /* ── Title column — truncated with tooltip + alert badge ─── */
-                              : col.fmt === "title" ? (
-                                <div style={{ display:"flex", alignItems:"center", gap:6, overflow:"hidden" }}>
-                                  {alert.level && (
-                                    <span title={alert.reasons.join(" · ")} style={{
-                                      flexShrink:0,
-                                      fontSize:9,
-                                      fontWeight:800,
-                                      padding:"1px 5px",
-                                      borderRadius:8,
-                                      background: alert.level === "urgent" ? "#DC2626" : "#F59E0B",
-                                      color:"#fff",
-                                      letterSpacing:0.3,
-                                    }}>
-                                      {alert.level === "urgent" ? "⚠ URGENT" : "⚠ WATCH"}
-                                    </span>
-                                  )}
-                                  <span title={row.Title || row.ASIN} style={{
-                                    overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
-                                    fontWeight: alert.level === "urgent" ? 700 : 600,
-                                  }}>
-                                    {row.Title ? (row.Title.length > 45 ? row.Title.slice(0, 45) + "…" : row.Title) : <span style={{ color:"#CBD5E1", fontStyle:"italic" }}>— no title —</span>}
-                                  </span>
-                                </div>
-                              )
-                              /* ── ASIN — linked ─────────────────────── */
-                              : col.key === "ASIN" && !isEmpty ? (
+                              {col.key === "ASIN" && !isEmpty ? (
                                 <a href={getAmazonProductUrl(row.ASIN)} target="_blank" rel="noreferrer" style={{ color:"#1D4ED8", fontWeight:800, textDecoration:"underline", textUnderlineOffset:"2px" }}>
                                   {disp}
                                 </a>
-                              )
-                              /* ── Model — opens detail ─────────────── */
-                              : col.key === "model" && !isEmpty ? (
+                              ) : col.key === "model" && !isEmpty ? (
                                 <span
                                   onClick={() => openModelPage(v)}
                                   title={`Open model ${v} detail`}
@@ -3975,23 +3712,12 @@ export default function Dashboard() {
                                 >
                                   {disp}
                                 </span>
-                              )
-                              /* ── Trend-enabled cells: NetSales/NetUnits/Sessions/Buybox/ACOS/TACOS etc. ── */
-                              : (delta != null && !isEmpty && ["TotalNetSalesValue","NetUnits","Sessions","BuyboxPct","TotalAdsSpend","TotalAdsSales","ACOS","TACOS"].includes(col.key)) ? (
-                                <div style={{ display:"inline-flex", alignItems:"center", justifyContent:"flex-end", gap:4, width:"100%" }}>
-                                  <span>{disp}</span>
-                                  <span title={`MoM: ${delta > 0 ? '+' : ''}${delta.toFixed(1)}${col.key === 'BuyboxPct' || col.key === 'ACOS' || col.key === 'TACOS' ? 'pp' : '%'} vs prev month`}
-                                    style={{ fontSize:9, color:deltaColor, fontWeight:800, fontFamily:"'DM Mono',monospace" }}>
-                                    {deltaArrow}
-                                  </span>
-                                </div>
-                              )
-                              : disp}
+                              ) : disp}
                             </td>
                           );
                         })}
                         {/* Brand and Month cells removed */}
-                        <td style={{ padding:"5px 12px", background: alert.level === "urgent" ? "#FEF2F2" : undefined }}>
+                        <td style={{ padding:"5px 12px" }}>
                           <div style={{ display:"flex", gap:6, alignItems:"center", flexWrap:"wrap" }}>
                             <a
                               href={getAmazonProductUrl(row.ASIN)}
@@ -5305,19 +5031,17 @@ export default function Dashboard() {
 
       {/* Table */}
       <div style={{ padding:"0 24px 32px", overflowX:"auto" }}>
-        <div style={{ borderRadius:12, border:`1px solid ${THEME.border}`, overflow:"hidden", minWidth:2100, background:THEME.surface, boxShadow:"0 4px 16px rgba(15,23,42,0.04)", opacity: isSearchPending ? 0.6 : 1, transition:"opacity 0.15s" }}>
+        <div style={{ borderRadius:12, border:`1px solid ${THEME.border}`, overflow:"hidden", minWidth:1800, background:THEME.surface, boxShadow:"0 4px 16px rgba(15,23,42,0.04)", opacity: isSearchPending ? 0.6 : 1, transition:"opacity 0.15s" }}>
           <div ref={tableScrollerRef} style={{ overflow:"auto", maxHeight:"calc(100vh - 240px)" }}>
           <table style={{ width:"100%", borderCollapse:"collapse", fontSize:11.5 }}>
             <thead>
               <tr style={{ background:THEME.headerBg }}>
                 {COLS.map(col => (
-                  <th key={col.key} onClick={() => { if (col.fmt !== "image") handleSort(col.key); }} style={{
-                    padding:"10px 10px",
-                    textAlign: (col.fmt==="str"||col.fmt==="title"||col.fmt==="month"||col.fmt==="image")?"left":"right",
+                  <th key={col.key} onClick={()=>handleSort(col.key)} style={{
+                    padding:"10px 10px", textAlign: col.fmt==="str"||col.fmt==="title"?"left":"right",
                     color: sortKey===col.key?"#1D4ED8":THEME.headerText,
                     fontFamily:"'DM Mono',monospace", fontSize:9.5, fontWeight:500,
-                    letterSpacing:0.7, textTransform:"uppercase",
-                    cursor: col.fmt === "image" ? "default" : "pointer",
+                    letterSpacing:0.7, textTransform:"uppercase", cursor:"pointer",
                     whiteSpace:"nowrap", userSelect:"none", minWidth:col.w,
                     background: sortKey===col.key ? THEME.headerBgActive : THEME.headerBg,
                     borderBottom: `1px solid ${THEME.borderStrong}`,
@@ -5336,20 +5060,8 @@ export default function Dashboard() {
               {pagedRows.map((row, index) => {
                 const i = (currentPage - 1) * TABLE_PAGE_SIZE + index;
                 const rowBackground = i % 2 === 0 ? THEME.surface : THEME.panelBg;
-                const alert = getRowAlert(row);
-                const alertBorder = alert.level === "urgent" ? "3px solid #DC2626"
-                                  : alert.level === "watch"  ? "3px solid #F59E0B"
-                                  : "3px solid transparent";
-                const rowImg = asinImageMap[row.ASIN];
-                const momKey = `${row.ASIN}|${row.Month}`;
-                const mom = MOM_DELTA_MAP[momKey] || {};
-                const effBackground = alert.level === "urgent" ? "#FEF2F2" : rowBackground;
                 return (
-                  <tr key={`${row.Brand}-${row.ASIN}-${row.Month}`} style={{
-                    borderBottom:"1px solid #F1F5F9",
-                    background: effBackground,
-                    borderLeft: alertBorder,
-                  }}
+                  <tr key={`${row.Brand}-${row.ASIN}-${row.Month}`} style={{ borderBottom:"1px solid #F1F5F9", background: rowBackground }}
                     onMouseEnter={e=>{
                       e.currentTarget.style.background=THEME.hover;
                       e.currentTarget.querySelectorAll("[data-sticky='true']").forEach((cell) => {
@@ -5357,9 +5069,9 @@ export default function Dashboard() {
                       });
                     }}
                     onMouseLeave={e=>{
-                      e.currentTarget.style.background=effBackground;
+                      e.currentTarget.style.background=rowBackground;
                       e.currentTarget.querySelectorAll("[data-sticky='true']").forEach((cell) => {
-                        cell.style.background = effBackground;
+                        cell.style.background = rowBackground;
                       });
                     }}
                   >
@@ -5370,27 +5082,15 @@ export default function Dashboard() {
                       const accentColor = isPct ? pctColor(col.key, v) : col.key === "Title" ? THEME.text : THEME.textSoft;
                       const isEmpty = v === null || v === undefined || v === 0 || v === "";
 
-                      const delta = mom[col.key];
-                      const lowerBetter = col.key === "ACOS" || col.key === "TACOS";
-                      const deltaColor = delta == null || Math.abs(delta) < 0.5
-                        ? "#94A3B8"
-                        : (lowerBetter ? (delta < 0) : (delta > 0))
-                          ? "#059669" : "#DC2626";
-                      const deltaArrow = delta == null || Math.abs(delta) < 0.5
-                        ? "→"
-                        : (delta > 0 ? "↑" : "↓");
-
                       return (
                         <td key={col.key} data-sticky={STICKY_LEFT_OFFSETS[col.key] !== undefined ? "true" : "false"} style={{
-                          padding: col.fmt === "image" ? "3px 4px" : "5px 10px",
-                          textAlign: (col.fmt==="str"||col.fmt==="title"||col.fmt==="month"||col.fmt==="image")?"left":"right",
+                          padding:"5px 10px",
+                          textAlign: col.fmt==="str"||col.fmt==="title"?"left":"right",
                           fontFamily: col.key==="ASIN"||col.key==="fbaSku"||col.key==="model" ? "'DM Mono',monospace" : "inherit",
                           fontSize: col.key==="ASIN" ? 12 : col.key==="fbaSku" ? 10.8 : 11.5,
-                          maxWidth: col.fmt==="title" ? 220 : col.fmt==="image" ? 44 : undefined,
+                          maxWidth: col.fmt==="title" ? 140 : undefined,
                           overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
-                          background: STICKY_LEFT_OFFSETS[col.key] !== undefined
-                            ? effBackground
-                            : col.master ? (isEmpty?THEME.surfaceMuted:"#F0F4FF") : "transparent",
+                          background: STICKY_LEFT_OFFSETS[col.key] !== undefined ? rowBackground : col.master ? (isEmpty?THEME.surfaceMuted:"#F0F4FF") : "transparent",
                           color: isEmpty ? "#CBD5E1" : col.key==="ASIN" ? "#1D4ED8" : accentColor,
                           letterSpacing: col.key==="ASIN" ? 0.3 : 0,
                           fontWeight: col.key==="ASIN" ? 800 : col.key==="model" ? 600 : col.key==="TotalNetSalesValue" ? 700 : col.key==="dp"||col.key==="nlc" ? 600 : 400,
@@ -5398,67 +5098,9 @@ export default function Dashboard() {
                           left: STICKY_LEFT_OFFSETS[col.key],
                           zIndex: STICKY_LEFT_OFFSETS[col.key] !== undefined ? 4 : 1,
                           borderRight: STICKY_LEFT_OFFSETS[col.key] !== undefined ? `1px solid ${THEME.border}` : undefined,
-                          boxShadow: STICKY_LEFT_OFFSETS[col.key] === STICKY_LEFT_OFFSETS.Image ? THEME.stickyShadow : undefined,
+                          boxShadow: STICKY_LEFT_OFFSETS[col.key] === STICKY_LEFT_OFFSETS.category ? THEME.stickyShadow : undefined,
                         }}>
-                          {/* Image */}
-                          {col.fmt === "image" ? (
-                            rowImg ? (
-                              <img src={rowImg} alt="" loading="lazy"
-                                onError={(e) => { e.currentTarget.style.display = "none"; }}
-                                style={{ width:34, height:34, objectFit:"contain", borderRadius:4, background:"#F9FAFB", border:`1px solid ${THEME.border}` }} />
-                            ) : (
-                              <div style={{ width:34, height:34, borderRadius:4, background:THEME.surfaceMuted, border:`1px dashed ${THEME.border}`, display:"inline-flex", alignItems:"center", justifyContent:"center", fontSize:12, color:THEME.textFaint }}>📦</div>
-                            )
-                          )
-                          /* Month pill */
-                          : col.fmt === "month" ? (
-                            (() => {
-                              const m = row.Month;
-                              const c = MONTH_COLORS[m] || { bg:"#F3F4F6", text:"#374151" };
-                              return (
-                                <span style={{
-                                  display:"inline-block",
-                                  background: c.bg,
-                                  color: c.text,
-                                  padding:"2px 8px",
-                                  borderRadius:12,
-                                  fontSize:10,
-                                  fontWeight:800,
-                                  letterSpacing:0.4,
-                                  fontFamily:"'DM Mono',monospace",
-                                }}>
-                                  {m || "—"}
-                                </span>
-                              );
-                            })()
-                          )
-                          /* Title + alert badge */
-                          : col.fmt === "title" ? (
-                            <div style={{ display:"flex", alignItems:"center", gap:6, overflow:"hidden" }}>
-                              {alert.level && (
-                                <span title={alert.reasons.join(" · ")} style={{
-                                  flexShrink:0,
-                                  fontSize:9,
-                                  fontWeight:800,
-                                  padding:"1px 5px",
-                                  borderRadius:8,
-                                  background: alert.level === "urgent" ? "#DC2626" : "#F59E0B",
-                                  color:"#fff",
-                                  letterSpacing:0.3,
-                                }}>
-                                  {alert.level === "urgent" ? "⚠ URGENT" : "⚠ WATCH"}
-                                </span>
-                              )}
-                              <span title={row.Title || row.ASIN} style={{
-                                overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
-                                fontWeight: alert.level === "urgent" ? 700 : 600,
-                              }}>
-                                {row.Title ? (row.Title.length > 45 ? row.Title.slice(0, 45) + "…" : row.Title) : <span style={{ color:"#CBD5E1", fontStyle:"italic" }}>— no title —</span>}
-                              </span>
-                            </div>
-                          )
-                          /* ASIN link */
-                          : col.key === "ASIN" && !isEmpty ? (
+                          {col.key === "ASIN" && !isEmpty ? (
                             <a
                               href={`https://www.amazon.in/dp/${encodeURIComponent(row.ASIN)}`}
                               target="_blank"
@@ -5468,9 +5110,15 @@ export default function Dashboard() {
                             >
                               {disp}
                             </a>
-                          )
-                          /* Model */
-                          : col.key === "model" && !isEmpty ? (
+                          ) : col.key === "Title" && !isEmpty ? (
+                            <button
+                              onClick={null}
+                              title={String(row.Title)}
+                              style={{ background:"none", border:"none", padding:0, color:THEME.text, fontFamily:"inherit", fontSize:"inherit", cursor:"pointer", textAlign:"left", fontWeight:600, maxWidth:130, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", display:"block" }}
+                            >
+                              {String(row.Title).split("|")[0].split(",")[0].trim().slice(0,32)}
+                            </button>
+                          ) : col.key === "model" && !isEmpty ? (
                             <span
                               onClick={() => openModelPage(v)}
                               title={`Open model ${v} detail`}
@@ -5478,26 +5126,7 @@ export default function Dashboard() {
                             >
                               {disp}
                             </span>
-                          )
-                          /* Metrics with MoM trend arrow */
-                          : (delta != null && !isEmpty && ["TotalNetSalesValue","NetUnits","Sessions","BuyboxPct","TotalAdsSpend","TotalAdsSales","ACOS","TACOS"].includes(col.key)) ? (
-                            <div style={{ display:"inline-flex", alignItems:"center", justifyContent:"flex-end", gap:4, width:"100%" }}>
-                              {isPct && v > 0 ? (
-                                <span style={{
-                                  display:"inline-block",
-                                  background: accentColor+"12",
-                                  border: `1px solid ${accentColor}33`,
-                                  borderRadius:4, padding:"1px 6px",
-                                  color: accentColor, fontSize:11,
-                                }}>{disp}</span>
-                              ) : <span>{disp}</span>}
-                              <span title={`MoM: ${delta > 0 ? '+' : ''}${delta.toFixed(1)}${col.key === 'BuyboxPct' || col.key === 'ACOS' || col.key === 'TACOS' ? 'pp' : '%'} vs prev month`}
-                                style={{ fontSize:9, color:deltaColor, fontWeight:800, fontFamily:"'DM Mono',monospace" }}>
-                                {deltaArrow}
-                              </span>
-                            </div>
-                          )
-                          : isPct && v > 0
+                          ) : isPct && v > 0
                             ? <span style={{
                                 display:"inline-block",
                                 background: accentColor+"12",

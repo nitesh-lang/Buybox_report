@@ -527,27 +527,27 @@ function MultiSelectFilter({ label, selected, setSelected, opts, onClear, isActi
         onClick={() => setOpen(o => !o)}
         style={{
           display:"flex", gap:6, alignItems:"center", padding:"7px 10px", borderRadius:8,
-          background: isActive ? "#EFF6FF" : "#1E293B",
-          border: isActive ? "1px solid #3B82F6" : "1px solid #334155",
+          background: isActive ? "#EFF6FF" : "#FFFFFF",
+          border: isActive ? "1px solid #3B82F6" : "1px solid #E2E8F0",
           cursor:"pointer", userSelect:"none", minWidth:100
         }}
       >
         <span style={{ fontSize:10, color: isActive ? "#2563EB" : "#64748B", fontFamily:"'DM Mono',monospace", letterSpacing:0.8, textTransform:"uppercase", fontWeight:600, whiteSpace:"nowrap" }}>{label}</span>
-        <span style={{ fontSize:12, color: isActive ? "#1D4ED8" : "#CBD5E1", whiteSpace:"nowrap" }}>{displayLabel}</span>
+        <span style={{ fontSize:12, color: isActive ? "#1D4ED8" : "#0F172A", whiteSpace:"nowrap", fontWeight:500 }}>{displayLabel}</span>
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={isActive?"#3B82F6":"#94A3B8"} strokeWidth="2" style={{ marginLeft:2, flexShrink:0 }}><polyline points={open?"18 15 12 9 6 15":"6 9 12 15 18 9"}/></svg>
       </div>
       {open && (
         <div style={{
           position:"absolute", top:"calc(100% + 4px)", left:0, zIndex:200,
-          background:"#1E293B", border:"1px solid #334155", borderRadius:10,
-          minWidth:190, boxShadow:"0 8px 24px rgba(0,0,0,0.4)", padding:"6px 0",
+          background:"#FFFFFF", border:"1px solid #E2E8F0", borderRadius:10,
+          minWidth:190, boxShadow:"0 8px 24px rgba(15,23,42,0.12)", padding:"6px 0",
           maxHeight:320, display:"flex", flexDirection:"column"
         }}>
           <div
             onClick={() => { setSelected([]); }}
-            style={{ padding:"7px 14px", fontSize:12, color: selected.length===0?"#3B82F6":"#94A3B8", cursor:"pointer", fontWeight: selected.length===0?700:400 }}
+            style={{ padding:"7px 14px", fontSize:12, color: selected.length===0?"#2563EB":"#475569", cursor:"pointer", fontWeight: selected.length===0?700:500 }}
           >All {label}s</div>
-          <div style={{ height:1, background:"#334155", margin:"4px 0" }}/>
+          <div style={{ height:1, background:"#E2E8F0", margin:"4px 0" }}/>
           <div style={{ overflowY:"auto", flex:1 }}>
           {opts.map(o => (
             <div
@@ -555,15 +555,15 @@ function MultiSelectFilter({ label, selected, setSelected, opts, onClear, isActi
               onClick={() => toggle(o.v)}
               style={{
                 padding:"7px 14px", fontSize:12, cursor:"pointer",
-                color: selected.includes(o.v) ? "#3B82F6" : "#CBD5E1",
-                fontWeight: selected.includes(o.v) ? 700 : 400,
+                color: selected.includes(o.v) ? "#2563EB" : "#0F172A",
+                fontWeight: selected.includes(o.v) ? 700 : 500,
                 display:"flex", alignItems:"center", gap:8
               }}
             >
               <div style={{
                 width:14, height:14, borderRadius:4, flexShrink:0,
-                border: selected.includes(o.v) ? "2px solid #3B82F6" : "2px solid #475569",
-                background: selected.includes(o.v) ? "#3B82F6" : "transparent",
+                border: selected.includes(o.v) ? "2px solid #2563EB" : "2px solid #CBD5E1",
+                background: selected.includes(o.v) ? "#2563EB" : "transparent",
                 display:"flex", alignItems:"center", justifyContent:"center"
               }}>
                 {selected.includes(o.v) && <svg width="8" height="8" viewBox="0 0 12 12"><polyline points="2,6 5,9 10,3" stroke="white" strokeWidth="2" fill="none"/></svg>}
@@ -1408,6 +1408,498 @@ function BsrFullPage({ row, onBack }) {
   );
 }
 
+// ── Daily BSR snapshot storage helpers (localStorage-backed) ────────────────
+const BSR_STORAGE_KEY = "bsr_daily_snapshots_v1";
+const todayStr = () => {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+};
+const formatDateShort = (iso) => {
+  // "2026-04-23" -> "23 Apr"
+  if (!iso) return "";
+  const [, m, d] = iso.split("-");
+  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  return `${parseInt(d,10)} ${months[parseInt(m,10)-1]}`;
+};
+const loadSnapshots = () => {
+  try {
+    const raw = localStorage.getItem(BSR_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch { return {}; }
+};
+const saveSnapshots = (snaps) => {
+  try { localStorage.setItem(BSR_STORAGE_KEY, JSON.stringify(snaps)); } catch {}
+};
+// Detect brand from filename: "Audio Array_BSR.csv" -> "Audio Array"
+const detectBrandFromFilename = (filename) => {
+  const name = filename.toLowerCase();
+  if (name.includes("audio")) return "Audio Array";
+  if (name.includes("nexlev")) return "Nexlev";
+  if (name.includes("tonor")) return "Tonor";
+  if (name.includes("mulberry") || name.includes("white")) return "White Mulberry";
+  return null;
+};
+
+// Extract ISO date (YYYY-MM-DD) from a filename. Handles multiple formats:
+//   "2026-04-23.csv"     -> "2026-04-23"
+//   "26-04-23.csv"       -> "2026-04-23"  (YY-MM-DD assumed 20YY)
+//   "Nexlev_2026-04-23"  -> "2026-04-23"
+//   "23-04-2026.csv"     -> "2026-04-23"  (DD-MM-YYYY)
+// Returns null if no valid date found.
+const extractDateFromFilename = (filename) => {
+  if (!filename) return null;
+  const name = filename.replace(/\.csv$/i, "");
+  // Try YYYY-MM-DD
+  let m = name.match(/(\d{4})[-_](\d{2})[-_](\d{2})/);
+  if (m) {
+    const [, y, mo, d] = m;
+    if (+mo >= 1 && +mo <= 12 && +d >= 1 && +d <= 31) return `${y}-${mo}-${d}`;
+  }
+  // Try DD-MM-YYYY
+  m = name.match(/(\d{2})[-_](\d{2})[-_](\d{4})/);
+  if (m) {
+    const [, d, mo, y] = m;
+    if (+mo >= 1 && +mo <= 12 && +d >= 1 && +d <= 31) return `${y}-${mo}-${d}`;
+  }
+  // Try YY-MM-DD (2-digit year, e.g. "26-04-23" -> 2026-04-23)
+  m = name.match(/(?:^|[^0-9])(\d{2})[-_](\d{2})[-_](\d{2})(?:$|[^0-9])/);
+  if (m) {
+    const [, y, mo, d] = m;
+    if (+mo >= 1 && +mo <= 12 && +d >= 1 && +d <= 31) return `20${y}-${mo}-${d}`;
+  }
+  return null;
+};
+
+// ── ASIN → Title lookup built once from RAW_DATA (Nexlev has titles) ────────
+const ASIN_TITLE_MAP = (() => {
+  const map = {};
+  try {
+    RAW_DATA.forEach(r => {
+      if (r.ASIN && r.Title && !map[r.ASIN]) map[r.ASIN] = r.Title;
+    });
+  } catch {}
+  return map;
+})();
+
+// ── Compact Keepa-style hover popup: BSR + Rating + Reviews on one card ────
+function BsrHoverChart({ row, x, y, title }) {
+  if (!row) return null;
+
+  // Card dimensions & positioning (flips to left/top edge if near window edge)
+  const CARD_W = 380;
+  const CARD_H = 260;
+  const margin = 14;
+  let left = x + margin;
+  let top  = y + margin;
+  if (typeof window !== "undefined") {
+    if (left + CARD_W > window.innerWidth - 8)  left = Math.max(8, x - CARD_W - margin);
+    if (top  + CARD_H > window.innerHeight - 8) top  = Math.max(8, y - CARD_H - margin);
+  }
+
+  // Chart geometry
+  const W = CARD_W, PAD_L = 38, PAD_R = 12, PAD_T = 8, PAD_B = 16;
+  const H1 = 80;  // BSR panel
+  const H2 = 48;  // Rating panel
+  const H3 = 48;  // Reviews panel
+  const plotW = W - PAD_L - PAD_R;
+
+  // 4 time points: 365d → 90d → 30d → Now
+  const pts = [
+    { label:"365d", bsr: row.bsr_365d, rating: row.rating, rc: row.reviews ? Math.round(row.reviews * 0.70) : null },
+    { label:"90d",  bsr: row.bsr_90d,  rating: row.rating, rc: row.reviews ? Math.round(row.reviews * 0.88) : null },
+    { label:"30d",  bsr: row.bsr_30d,  rating: row.rating, rc: row.reviews ? Math.round(row.reviews * 0.95) : null },
+    { label:"Now",  bsr: row.bsr,      rating: row.rating, rc: row.reviews },
+  ];
+
+  const xStep = plotW / (pts.length - 1);
+  const xAt = i => PAD_L + i * xStep;
+
+  // BSR (inverted: lower rank = higher on chart like Keepa)
+  const bsrVals = pts.map(p => p.bsr).filter(v => v != null && v > 0);
+  const bsrMax = bsrVals.length ? Math.max(...bsrVals) : 1;
+  const bsrMin = bsrVals.length ? Math.min(...bsrVals) : 0;
+  const bsrSpan = (bsrMax - bsrMin) || 1;
+  const bsrY = v => PAD_T + ((v - bsrMin) / bsrSpan) * (H1 - PAD_T - PAD_B);
+  const bsrPath = pts.map((p,i) => p.bsr ? `${i===0||!pts[i-1]?.bsr?"M":"L"}${xAt(i)},${bsrY(p.bsr)}` : "").filter(Boolean).join(" ");
+
+  // Rating (1-5 scale, fixed)
+  const ratingY = v => PAD_T + ((5 - v) / 4) * (H2 - PAD_T - PAD_B);
+  const ratingPath = row.rating ? pts.map((p,i) => `${i===0?"M":"L"}${xAt(i)},${ratingY(p.rating)}`).join(" ") : "";
+
+  // Reviews (growth estimated)
+  const rcVals = pts.map(p => p.rc).filter(v => v != null);
+  const rcMax = rcVals.length ? Math.max(...rcVals) : 1;
+  const rcY = v => PAD_T + (1 - v / rcMax) * (H3 - PAD_T - PAD_B);
+  const rcPath = rcVals.length ? pts.map((p,i) => p.rc ? `${i===0||!pts[i-1]?.rc?"M":"L"}${xAt(i)},${rcY(p.rc)}` : "").filter(Boolean).join(" ") : "";
+
+  // Keepa palette
+  const K_BSR    = "#2E9442";
+  const K_RATING = "#17A6A6";
+  const K_RC     = "#9ACD32";
+  const BG_GRID  = "#F3F4F6";
+  const TEXT_DIM = "#6B7280";
+
+  const fmt = (v, p="#") => v ? `${p}${v.toLocaleString("en-IN")}` : "—";
+
+  return (
+    <div style={{
+      position:"fixed", left, top, zIndex:9998,
+      width:CARD_W,
+      background:"#fff", border:"1px solid #D1D5DB", borderRadius:10,
+      boxShadow:"0 16px 40px rgba(15,23,42,0.18), 0 2px 6px rgba(15,23,42,0.08)",
+      fontFamily:"'Inter','Segoe UI',sans-serif",
+      pointerEvents:"none",
+      overflow:"hidden",
+    }}>
+      {/* Title strip */}
+      <div style={{ padding:"7px 12px", borderBottom:"1px solid #E5E7EB", background:"#F9FAFB", display:"flex", gap:8, alignItems:"center" }}>
+        {row.image ? (
+          <img src={row.image} alt="" loading="lazy"
+            onError={(e) => { e.currentTarget.style.display = "none"; }}
+            style={{ width:36, height:36, objectFit:"contain", borderRadius:4, background:"#fff", border:"1px solid #E5E7EB", flexShrink:0 }} />
+        ) : null}
+        <div style={{ minWidth:0, flex:1 }}>
+          <div style={{ fontSize:11, fontWeight:700, color:"#111827", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}
+            title={title || row.title || row.asin}>
+            {title || row.title || row.asin}
+          </div>
+          <div style={{ fontSize:9, color:TEXT_DIM, fontFamily:"'DM Mono',monospace", marginTop:1 }}>
+            {row.asin} · {row.brand}
+          </div>
+        </div>
+      </div>
+
+      {/* Legend row */}
+      <div style={{ display:"flex", gap:10, padding:"6px 12px", background:"#fff", fontSize:9, fontFamily:"'DM Mono',monospace", fontWeight:700 }}>
+        <span style={{ color:K_BSR }}>● Sales Rank {fmt(row.bsr)}</span>
+        <span style={{ color:K_RATING }}>● ★ {row.rating ?? "—"}</span>
+        <span style={{ color:K_RC }}>● Reviews {row.reviews?.toLocaleString("en-IN") ?? "—"}</span>
+      </div>
+
+      {/* ── BSR panel ── */}
+      <svg width={W} height={H1} style={{ display:"block" }}>
+        <rect x={PAD_L} y={PAD_T} width={plotW} height={H1-PAD_T-PAD_B} fill={BG_GRID} rx={2} />
+        {/* y-axis label: rank */}
+        <text x={6} y={PAD_T+10} fontSize={8} fontFamily="DM Mono,monospace" fill={TEXT_DIM}>#{bsrMin || "—"}</text>
+        <text x={6} y={H1-PAD_B} fontSize={8} fontFamily="DM Mono,monospace" fill={TEXT_DIM}>#{bsrMax || "—"}</text>
+        {/* line */}
+        {bsrPath && <path d={bsrPath} fill="none" stroke={K_BSR} strokeWidth={2} />}
+        {/* dots */}
+        {pts.map((p,i) => p.bsr ? <circle key={i} cx={xAt(i)} cy={bsrY(p.bsr)} r={2.5} fill={K_BSR} /> : null)}
+        {/* x labels */}
+        {pts.map((p,i) => (
+          <text key={i} x={xAt(i)} y={H1-3} fontSize={8} fontFamily="DM Mono,monospace" fill={TEXT_DIM} textAnchor="middle">{p.label}</text>
+        ))}
+      </svg>
+
+      {/* ── Rating panel ── */}
+      <svg width={W} height={H2} style={{ display:"block", borderTop:"1px dashed #E5E7EB" }}>
+        <text x={6} y={PAD_T+8} fontSize={8} fontFamily="DM Mono,monospace" fill={TEXT_DIM}>5★</text>
+        <text x={6} y={H2-PAD_B+2} fontSize={8} fontFamily="DM Mono,monospace" fill={TEXT_DIM}>1★</text>
+        {ratingPath && <path d={ratingPath} fill="none" stroke={K_RATING} strokeWidth={2} />}
+        {row.rating && pts.map((p,i) => <circle key={i} cx={xAt(i)} cy={ratingY(p.rating)} r={2.5} fill={K_RATING} />)}
+      </svg>
+
+      {/* ── Reviews panel ── */}
+      <svg width={W} height={H3} style={{ display:"block", borderTop:"1px dashed #E5E7EB" }}>
+        <text x={6} y={PAD_T+8} fontSize={8} fontFamily="DM Mono,monospace" fill={TEXT_DIM}>{fmt(rcMax, "")}</text>
+        <text x={6} y={H3-PAD_B+2} fontSize={8} fontFamily="DM Mono,monospace" fill={TEXT_DIM}>0</text>
+        {rcPath && <path d={rcPath} fill="none" stroke={K_RC} strokeWidth={2} />}
+        {rcVals.length > 0 && pts.map((p,i) => p.rc ? <circle key={i} cx={xAt(i)} cy={rcY(p.rc)} r={2.5} fill={K_RC} /> : null)}
+      </svg>
+
+      {/* Footer hint */}
+      <div style={{ padding:"5px 12px", borderTop:"1px solid #E5E7EB", fontSize:9, color:TEXT_DIM, fontFamily:"'DM Mono',monospace", background:"#F9FAFB", textAlign:"center" }}>
+        click for details · double-click for full chart
+      </div>
+    </div>
+  );
+}
+
+// ── Month-view mini calendar popup ──────────────────────────────────────
+// Props:
+//   value       — currently selected ISO date (YYYY-MM-DD) or null
+//   uploadedSet — Set of ISO dates that have uploads (highlighted)
+//   onPick(iso) — callback when a date is clicked
+//   onClose()   — callback when user clicks outside
+function MiniCalendar({ value, uploadedSet, onPick, onClose }) {
+  const todayISO = todayStr();
+  const [cursor, setCursor] = useState(() => {
+    // Start viewing the month of the selected date, or today's month
+    const base = value || todayISO;
+    const [y, m] = base.split("-").map(Number);
+    return { year: y, month: m - 1 }; // JS month is 0-indexed
+  });
+
+  const wrapRef = useRef(null);
+  useEffect(() => {
+    const handler = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) onClose?.();
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [onClose]);
+
+  const monthNames = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+  const daysShort  = ["S","M","T","W","T","F","S"];
+
+  const { year, month } = cursor;
+  const firstDay = new Date(year, month, 1);
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const startWeekday = firstDay.getDay(); // 0 = Sunday
+
+  // Build grid cells
+  const cells = [];
+  for (let i = 0; i < startWeekday; i++) cells.push(null); // blanks before day 1
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+
+  const toISO = (d) => `${year}-${String(month+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+
+  const goMonth = (delta) => {
+    setCursor(c => {
+      const nm = c.month + delta;
+      if (nm < 0) return { year: c.year - 1, month: 11 };
+      if (nm > 11) return { year: c.year + 1, month: 0 };
+      return { year: c.year, month: nm };
+    });
+  };
+
+  return (
+    <div ref={wrapRef}
+      style={{
+        position:"absolute", top:"110%", left:0, zIndex:500,
+        background:"#fff", border:"1px solid #D1D5DB", borderRadius:10,
+        boxShadow:"0 16px 40px rgba(15,23,42,0.18), 0 2px 6px rgba(15,23,42,0.08)",
+        padding:12, width:272,
+        fontFamily:"'Inter','Segoe UI',sans-serif",
+      }}>
+      {/* Header: month nav */}
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
+        <button onClick={() => goMonth(-1)}
+          style={{ background:"none", border:"1px solid #E5E7EB", borderRadius:6, padding:"4px 8px", cursor:"pointer", fontSize:12, color:"#4B5563", fontWeight:700 }}>‹</button>
+        <div style={{ fontSize:13, fontWeight:800, color:"#111827" }}>
+          {monthNames[month]} {year}
+        </div>
+        <button onClick={() => goMonth(1)}
+          style={{ background:"none", border:"1px solid #E5E7EB", borderRadius:6, padding:"4px 8px", cursor:"pointer", fontSize:12, color:"#4B5563", fontWeight:700 }}>›</button>
+      </div>
+
+      {/* Day-of-week header */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(7, 1fr)", gap:2, marginBottom:4 }}>
+        {daysShort.map((d, i) => (
+          <div key={i} style={{ textAlign:"center", fontSize:9, fontFamily:"'DM Mono',monospace", fontWeight:700, color:"#9CA3AF", letterSpacing:1 }}>{d}</div>
+        ))}
+      </div>
+
+      {/* Date grid */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(7, 1fr)", gap:2 }}>
+        {cells.map((d, i) => {
+          if (d === null) return <div key={i} />;
+          const iso = toISO(d);
+          const isToday    = iso === todayISO;
+          const isSelected = iso === value;
+          const hasUpload  = uploadedSet.has(iso);
+          return (
+            <button key={i}
+              onClick={() => { if (hasUpload) onPick(iso); }}
+              disabled={!hasUpload}
+              style={{
+                position:"relative",
+                padding:"6px 0", borderRadius:6,
+                fontSize:11, fontWeight:700,
+                background: isSelected ? "#2563EB" : isToday ? "#EFF6FF" : "#fff",
+                color:      isSelected ? "#fff" : hasUpload ? "#111827" : "#D1D5DB",
+                border:     isSelected ? "1px solid #2563EB" : isToday ? "1px solid #93C5FD" : "1px solid transparent",
+                cursor:     hasUpload ? "pointer" : "not-allowed",
+                transition:"all 0.1s",
+              }}
+              title={hasUpload ? `${iso} — click to view` : `${iso} — no data`}
+            >
+              {d}
+              {hasUpload && (
+                <span style={{
+                  position:"absolute", bottom:2, left:"50%", transform:"translateX(-50%)",
+                  width:4, height:4, borderRadius:"50%",
+                  background: isSelected ? "#fff" : "#2563EB",
+                }}/>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Footer: legend */}
+      <div style={{ display:"flex", gap:12, marginTop:10, paddingTop:8, borderTop:"1px solid #F3F4F6", fontSize:9, fontFamily:"'DM Mono',monospace", color:"#9CA3AF" }}>
+        <span style={{ display:"inline-flex", alignItems:"center", gap:4 }}>
+          <span style={{ width:5, height:5, borderRadius:"50%", background:"#2563EB" }}/> has data
+        </span>
+        <span style={{ display:"inline-flex", alignItems:"center", gap:4 }}>
+          <span style={{ width:8, height:8, borderRadius:3, background:"#EFF6FF", border:"1px solid #93C5FD" }}/> today
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ── Upload date picker dialog ───────────────────────────────────────────
+// Shown AFTER user picks folder, when multiple dates are detected.
+// Lets user choose: specific date, all dates, or cancel.
+function UploadDatePicker({ pendingUpload, existingDates, onCancel, onConfirm }) {
+  const { filesByDate, dateOptions } = pendingUpload;
+  const today = todayStr();
+
+  // Default selection: today if present, else the latest date
+  const [selected, setSelected] = useState(() => {
+    const set = new Set();
+    if (dateOptions.includes(today)) set.add(today);
+    else if (dateOptions.length > 0) set.add(dateOptions[0]);
+    return set;
+  });
+
+  const toggle = (date) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(date)) next.delete(date);
+      else next.add(date);
+      return next;
+    });
+  };
+
+  const selectAll  = () => setSelected(new Set(dateOptions));
+  const selectNone = () => setSelected(new Set());
+  const selectToday = () => {
+    if (dateOptions.includes(today)) setSelected(new Set([today]));
+  };
+  const selectLatest = () => {
+    if (dateOptions.length > 0) setSelected(new Set([dateOptions[0]]));
+  };
+
+  const totalFiles = [...selected].reduce((s,d) => s + (filesByDate[d]?.length || 0), 0);
+
+  return (
+    <div onClick={onCancel}
+      style={{ position:"fixed", inset:0, background:"rgba(15,23,42,0.65)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9998, padding:16 }}>
+      <div onClick={e => e.stopPropagation()}
+        style={{
+          background:"#fff", borderRadius:14, width:520, maxWidth:"96vw", maxHeight:"90vh", overflow:"hidden",
+          boxShadow:"0 30px 90px rgba(0,0,0,0.35)", fontFamily:"'Inter','Segoe UI',sans-serif", display:"flex", flexDirection:"column",
+        }}>
+
+        {/* Header */}
+        <div style={{ padding:"14px 18px", borderBottom:"1px solid #E5E7EB", background:"#F9FAFB" }}>
+          <div style={{ fontSize:15, fontWeight:800, color:"#111827" }}>
+            📅 Choose dates to upload
+          </div>
+          <div style={{ fontSize:11, color:"#6B7280", marginTop:3 }}>
+            Found <b>{dateOptions.length}</b> date{dateOptions.length!==1?"s":""} across <b>{Object.values(filesByDate).flat().length}</b> files. Pick which ones to import.
+          </div>
+        </div>
+
+        {/* Quick actions */}
+        <div style={{ display:"flex", gap:6, padding:"10px 18px", borderBottom:"1px solid #F3F4F6", flexWrap:"wrap" }}>
+          {dateOptions.includes(today) && (
+            <button onClick={selectToday}
+              style={{ background:"#EFF6FF", color:"#1D4ED8", border:"1px solid #93C5FD", borderRadius:6, padding:"5px 10px", fontSize:11, fontWeight:700, cursor:"pointer" }}>
+              ⚡ Today only
+            </button>
+          )}
+          <button onClick={selectLatest}
+            style={{ background:"#F9FAFB", color:"#374151", border:"1px solid #D1D5DB", borderRadius:6, padding:"5px 10px", fontSize:11, fontWeight:700, cursor:"pointer" }}>
+            ★ Latest date only
+          </button>
+          <button onClick={selectAll}
+            style={{ background:"#F9FAFB", color:"#374151", border:"1px solid #D1D5DB", borderRadius:6, padding:"5px 10px", fontSize:11, fontWeight:700, cursor:"pointer" }}>
+            All dates
+          </button>
+          <button onClick={selectNone}
+            style={{ background:"#F9FAFB", color:"#6B7280", border:"1px solid #D1D5DB", borderRadius:6, padding:"5px 10px", fontSize:11, fontWeight:700, cursor:"pointer" }}>
+            Clear
+          </button>
+        </div>
+
+        {/* Date list */}
+        <div style={{ flex:1, overflowY:"auto", padding:"6px 0", minHeight:120, maxHeight:380 }}>
+          {dateOptions.map(date => {
+            const isSel    = selected.has(date);
+            const isToday  = date === today;
+            const willOverwrite = existingDates.has(date);
+            const files = filesByDate[date] || [];
+            const brandsFound = new Set();
+            files.forEach(f => {
+              let b = detectBrandFromFilename(f.name);
+              if (!b && f.webkitRelativePath) b = detectBrandFromFilename(f.webkitRelativePath);
+              if (b) brandsFound.add(b);
+            });
+            return (
+              <label key={date}
+                style={{
+                  display:"flex", alignItems:"center", gap:12,
+                  padding:"10px 18px", cursor:"pointer",
+                  borderLeft: isSel ? "3px solid #2563EB" : "3px solid transparent",
+                  background: isSel ? "#EFF6FF" : "transparent",
+                  transition:"all 0.1s",
+                }}>
+                <input type="checkbox" checked={isSel} onChange={() => toggle(date)}
+                  style={{ width:16, height:16, cursor:"pointer", accentColor:"#2563EB" }} />
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                    <span style={{ fontSize:13, fontWeight:800, color:"#111827" }}>
+                      {formatDateShort(date)} <span style={{ fontFamily:"'DM Mono',monospace", color:"#9CA3AF", fontWeight:600, fontSize:11 }}>({date})</span>
+                    </span>
+                    {isToday && (
+                      <span style={{ background:"#DCFCE7", color:"#166534", padding:"1px 7px", borderRadius:10, fontSize:9, fontWeight:800 }}>TODAY</span>
+                    )}
+                    {willOverwrite && (
+                      <span style={{ background:"#FEF3C7", color:"#92400E", padding:"1px 7px", borderRadius:10, fontSize:9, fontWeight:800 }}>
+                        ⚠ WILL OVERWRITE
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ fontSize:10, color:"#6B7280", marginTop:2, fontFamily:"'DM Mono',monospace" }}>
+                    {files.length} file{files.length!==1?"s":""}
+                    {brandsFound.size > 0 && ` · ${[...brandsFound].join(", ")}`}
+                  </div>
+                </div>
+              </label>
+            );
+          })}
+        </div>
+
+        {/* Footer: action buttons */}
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:10, padding:"12px 18px", borderTop:"1px solid #E5E7EB", background:"#F9FAFB" }}>
+          <div style={{ fontSize:11, color:"#6B7280" }}>
+            {selected.size === 0 ? (
+              <span style={{ color:"#DC2626" }}>Select at least one date</span>
+            ) : (
+              <>Importing <b style={{ color:"#111827" }}>{totalFiles} files</b> across <b style={{ color:"#111827" }}>{selected.size} date{selected.size!==1?"s":""}</b></>
+            )}
+          </div>
+          <div style={{ display:"flex", gap:8 }}>
+            <button onClick={onCancel}
+              style={{ background:"#fff", color:"#374151", border:"1px solid #D1D5DB", borderRadius:8, padding:"8px 14px", fontSize:12, fontWeight:700, cursor:"pointer" }}>
+              Cancel
+            </button>
+            <button onClick={() => onConfirm([...selected])}
+              disabled={selected.size === 0}
+              style={{
+                background: selected.size === 0 ? "#9CA3AF" : "linear-gradient(135deg,#2563EB,#1D4ED8)",
+                color:"#fff", border:"none", borderRadius:8, padding:"8px 16px",
+                fontSize:12, fontWeight:800,
+                cursor: selected.size === 0 ? "not-allowed" : "pointer",
+                boxShadow: selected.size === 0 ? "none" : "0 2px 6px rgba(37,99,235,0.3)",
+              }}>
+              Import {selected.size > 0 ? `→ ${selected.size}` : ""}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function BsrTrackerPage({ onBack }) {
   const T = THEME;
   const [bsrBrand,   setBsrBrand]   = useState("All");
@@ -1417,25 +1909,73 @@ function BsrTrackerPage({ onBack }) {
   const [bsrPageNum, setBsrPageNum] = useState(1);
   const [modalRow,   setModalRow]   = useState(null);
   const [fullPageRow, setFullPageRow] = useState(null); // double-click opens Keepa-style full page
-  const [uploadedData, setUploadedData] = useState({}); // { brandName: [rows] }
   const [toast,        setToast]        = useState(null); // { type, msg }
   const [quickFilter,  setQuickFilter]  = useState(null); // null | 'top1k' | 'rising' | 'falling' | 'problem' | 'zero_sales'
-  const [uploadTimestamps, setUploadTimestamps] = useState({}); // { brand: Date }
+
+  // ── Hover popup (Keepa-style mini chart on title hover) ────────────────
+  const [hoverRow, setHoverRow] = useState(null);
+  const [hoverPos, setHoverPos] = useState({ x: 0, y: 0 });
+
+  // ── Upload picker dialog: after user selects folder, we scan files,
+  //     group by detected date, and show this dialog for user to choose.
+  //     pendingUpload = { filesByDate: { "2026-04-23": [File, File, ...] }, dateOptions: [...] }
+  const [pendingUpload, setPendingUpload] = useState(null);
+
+  // ── Daily snapshots: { "2026-04-23": { "Audio Array": [rows], "Nexlev": [rows], ... } }
+  const [snapshots, setSnapshots] = useState(() => loadSnapshots());
+  // Currently-viewed date (default: most recent uploaded date, or null = use built-in BSR_RAW)
+  const availableDates = useMemo(() => Object.keys(snapshots).sort().reverse(), [snapshots]);
+  const [viewDate, setViewDate] = useState(() => {
+    const snaps = loadSnapshots();
+    const today = todayStr();
+    if (snaps[today]) return today;          // prefer today if uploaded
+    const keys = Object.keys(snaps).sort().reverse();
+    return keys[0] || null;                  // else latest
+  });
+  // Compare mode: separate toggle — when ON shows compare view
+  const [compareMode, setCompareMode] = useState(false);
+  const [compareDate, setCompareDate] = useState(null);
+  const [calendarOpen, setCalendarOpen] = useState(false);
+
+  // Persist whenever snapshots change
+  useEffect(() => { saveSnapshots(snapshots); }, [snapshots]);
+
+  // Legacy compatibility: uploadedData/uploadTimestamps derived from current viewDate
+  const uploadedData = viewDate && snapshots[viewDate] ? snapshots[viewDate] : {};
+  const uploadTimestamps = useMemo(() => {
+    if (!viewDate || !snapshots[viewDate]) return {};
+    const out = {};
+    Object.keys(snapshots[viewDate]).forEach(b => { out[b] = new Date(viewDate + "T12:00:00"); });
+    return out;
+  }, [viewDate, snapshots]);
   const PAGE_SIZE = 20;
 
-  // Column definitions for sortable header
-  const COLUMNS = [
-    { key:"rank",         label:"#",              width:36,  sortable:false, align:"left" },
-    { key:"asin",         label:"ASIN",           width:120, sortable:true,  align:"left", type:"string" },
-    { key:"brand",        label:"BRAND",          width:130, sortable:true,  align:"left", type:"string" },
-    { key:"bsr",          label:"CURRENT RANK",   width:130, sortable:true,  align:"left", type:"number" },
-    { key:"trend",        label:"TREND",          width:110, sortable:true,  align:"left", type:"string" },
-    { key:"rating",       label:"RATING",         width:120, sortable:true,  align:"left", type:"number" },
-    { key:"reviews",      label:"RATING COUNT",   width:100, sortable:true,  align:"left", type:"number" },
-    { key:"bsr_30d",      label:"30D AVG RANK",   width:125, sortable:true,  align:"left", type:"number" },
-    { key:"drops_30d",    label:"FOOTFALL / 30D", width:150, sortable:true,  align:"left", type:"number" },
-    { key:"monthly_sold", label:"MONTHLY SOLD",   width:110, sortable:true,  align:"left", type:"number" },
-  ];
+  // Column definitions for sortable header (compare mode inserts 2 extra columns)
+  const COLUMNS = useMemo(() => {
+    const cmpOn = compareMode && compareDate;
+    const base = [
+      { key:"rank",         label:"#",              width:36,  sortable:false, align:"left" },
+      { key:"image",        label:"IMG",            width:48,  sortable:false, align:"center" },
+      { key:"title",        label:"TITLE",          width:240, sortable:true,  align:"left", type:"string" },
+      { key:"asin",         label:"ASIN",           width:118, sortable:true,  align:"left", type:"string" },
+      { key:"brand",        label:"BRAND",          width:120, sortable:true,  align:"left", type:"string" },
+      { key:"bsr",          label: cmpOn ? `RANK · ${formatDateShort(viewDate)}` : "CURRENT RANK", width:130, sortable:true, align:"left", type:"number" },
+    ];
+    if (cmpOn) {
+      base.push({ key:"bsr_B",         label:`RANK · ${formatDateShort(compareDate)}`, width:130, sortable:true, align:"left", type:"number" });
+      base.push({ key:"bsr_delta",     label:"Δ RANK",     width:110, sortable:true, align:"left", type:"number" });
+      base.push({ key:"bsr_delta_pct", label:"Δ %",        width:90,  sortable:true, align:"left", type:"number" });
+    }
+    base.push(
+      { key:"trend",        label:"TREND",          width:110, sortable:true,  align:"left", type:"string" },
+      { key:"rating",       label:"RATING",         width:120, sortable:true,  align:"left", type:"number" },
+      { key:"reviews",      label:"RATING COUNT",   width:100, sortable:true,  align:"left", type:"number" },
+      { key:"bsr_30d",      label:"30D AVG RANK",   width:125, sortable:true,  align:"left", type:"number" },
+      { key:"drops_30d",    label:"FOOTFALL / 30D", width:150, sortable:true,  align:"left", type:"number" },
+      { key:"monthly_sold", label:"MONTHLY SOLD",   width:110, sortable:true,  align:"left", type:"number" },
+    );
+    return base;
+  }, [compareMode, compareDate, viewDate]);
 
   // Click handler: same column -> flip direction; new column -> set with sensible default
   const handleSort = (key) => {
@@ -1458,6 +1998,8 @@ function BsrTrackerPage({ onBack }) {
     const built = BSR_RAW.map(row => {
       const m = ASIN_MASTER[row.asin] || {};
       return { ...row,
+        image:    row.image || "",
+        title:    row.title || ASIN_TITLE_MAP[row.asin] || "",
         model:    m.model    || "—",
         category: m.category || "—",
         fbaSku:   m.fbaSku   || "—",
@@ -1466,23 +2008,48 @@ function BsrTrackerPage({ onBack }) {
     });
     // Replace any brand that has uploaded data with the new rows
     const uploadedBrands = Object.keys(uploadedData);
-    if (uploadedBrands.length === 0) return built;
-    const kept = built.filter(r => !uploadedBrands.includes(r.brand));
-    const fresh = [];
-    uploadedBrands.forEach(b => {
-      (uploadedData[b] || []).forEach(row => {
-        const m = ASIN_MASTER[row.asin] || {};
-        fresh.push({
-          ...row,
-          brand: b,
-          model:    m.model    || "—",
-          category: m.category || "—",
-          fbaSku:   m.fbaSku   || "—",
+    let base;
+    if (uploadedBrands.length === 0) {
+      base = built;
+    } else {
+      const kept = built.filter(r => !uploadedBrands.includes(r.brand));
+      const fresh = [];
+      uploadedBrands.forEach(b => {
+        (uploadedData[b] || []).forEach(row => {
+          const m = ASIN_MASTER[row.asin] || {};
+          fresh.push({
+            ...row,
+            brand: b,
+            image: row.image || "",
+            title: row.title || ASIN_TITLE_MAP[row.asin] || "",
+            model:    m.model    || "—",
+            category: m.category || "—",
+            fbaSku:   m.fbaSku   || "—",
+          });
         });
       });
-    });
-    return [...kept, ...fresh];
-  }, [uploadedData]);
+      base = [...kept, ...fresh];
+    }
+
+    // If compare mode is on, enrich each row with Date-B values
+    if (compareMode && compareDate && snapshots[compareDate]) {
+      const compSnap = snapshots[compareDate];
+      const compMap = {};
+      Object.keys(compSnap).forEach(b => {
+        (compSnap[b] || []).forEach(r => { compMap[r.asin] = r; });
+      });
+      return base.map(r => {
+        const cmp = compMap[r.asin];
+        if (!cmp || !cmp.bsr || !r.bsr) {
+          return { ...r, bsr_B: cmp?.bsr || null, bsr_delta: null, bsr_delta_pct: null };
+        }
+        const delta = r.bsr - cmp.bsr;  // negative = improved (lower rank is better)
+        const pct = (delta / cmp.bsr) * 100;
+        return { ...r, bsr_B: cmp.bsr, bsr_delta: delta, bsr_delta_pct: pct };
+      });
+    }
+    return base;
+  }, [uploadedData, compareMode, compareDate, snapshots]);
 
   const filtered = useMemo(() => {
     let rows = data.filter(r => r.bsr > 0);
@@ -1540,11 +2107,12 @@ function BsrTrackerPage({ onBack }) {
     return () => clearTimeout(t);
   }, [toast]);
 
-  // Parse a Keepa CSV into BSR rows. Expected columns (10):
-  //   "Sales Rank: Current", "Sales Rank: 30 days avg.", "Sales Rank: 90 days avg.",
-  //   "Sales Rank: 365 days avg.", "Sales Rank: Drops last 30 days",
-  //   "Reviews: Rating", "Reviews: Rating Count", "ASIN", "Brand",
-  //   "Monthly Sales Trends: Monthly Sold (Last Known)"
+  // Parse a Keepa CSV into BSR rows. Handles both old and new column sets:
+  //   Old: "Sales Rank: Current", "Sales Rank: 30/90/365 days avg.",
+  //        "Sales Rank: Drops last 30 days", "Reviews: Rating", "Reviews: Rating Count",
+  //        "ASIN", "Brand", "Monthly Sold"
+  //   New: adds "Image" (semicolon-separated URLs), "Title",
+  //        and uses "Sales Rank: 30 days drop %" instead of drop count.
   const parseKeepaCsv = (text) => {
     const parseRow = (line) => {
       const out = []; let cur = ""; let q = false;
@@ -1563,18 +2131,25 @@ function BsrTrackerPage({ onBack }) {
     if (lines.length < 2) return [];
     const headers = parseRow(lines[0]);
     const idx = (name) => headers.findIndex(h => h.toLowerCase().includes(name.toLowerCase()));
+    const iImg    = idx("Image");
+    const iTitle  = idx("Title");
     const iCurr   = idx("Sales Rank: Current");
-    const i30     = idx("Sales Rank: 30");
+    const i30     = idx("Sales Rank: 30 days avg");
     const i90     = idx("Sales Rank: 90");
     const i365    = idx("Sales Rank: 365");
-    const iDrops  = idx("Drops last 30");
+    // Both old ("Drops last 30 days") and new ("30 days drop %") map to drops_30d.
+    // If header has "drop %", we'll treat the value as a percentage string.
+    const iDrops    = idx("Drops last 30");
+    const iDropsPct = idx("30 days drop %");
+    const iDropsCol = iDrops >= 0 ? iDrops : iDropsPct;
+    const dropsIsPct = iDrops < 0 && iDropsPct >= 0;
     const iRating = idx("Reviews: Rating");
     const iRevCnt = idx("Rating Count");
     const iAsin   = idx("ASIN");
     const iMonth  = idx("Monthly Sold");
     const toNum = (v) => {
       if (v === undefined || v === null) return null;
-      const s = String(v).replace(/[",#]/g, "").replace(/[\u00A0\s]/g, "").trim();
+      const s = String(v).replace(/[",#%]/g, "").replace(/[\u00A0\s]/g, "").trim();
       if (!s || s === "-" || s.toLowerCase() === "n/a") return null;
       const n = parseFloat(s);
       return isNaN(n) ? null : n;
@@ -1584,11 +2159,15 @@ function BsrTrackerPage({ onBack }) {
       const cols = parseRow(lines[li]);
       const asin = (cols[iAsin] || "").trim();
       if (!asin || asin.length < 8) continue;
+      // Image: first URL before ";" (Keepa returns multiple joined by semicolon)
+      const imgRaw  = iImg >= 0 ? (cols[iImg] || "").trim() : "";
+      const image   = imgRaw ? imgRaw.split(";")[0].trim() : "";
+      const title   = iTitle >= 0 ? (cols[iTitle] || "").trim() : "";
       const bsr     = toNum(cols[iCurr]);
       const bsr30   = toNum(cols[i30]);
       const bsr90   = toNum(cols[i90]);
       const bsr365  = toNum(cols[i365]);
-      const drops   = toNum(cols[iDrops]);
+      const dropsRaw = iDropsCol >= 0 ? toNum(cols[iDropsCol]) : null;
       const rating  = toNum(cols[iRating]);
       const reviews = toNum(cols[iRevCnt]);
       const monthly = toNum(cols[iMonth]);
@@ -1596,16 +2175,20 @@ function BsrTrackerPage({ onBack }) {
       let trend = "stable";
       if (bsr && bsr30) {
         const diff = (bsr30 - bsr) / bsr30;
-        if (diff > 0.1) trend = "up";      // current better than 30d avg = improving
+        if (diff > 0.1) trend = "up";
         else if (diff < -0.1) trend = "down";
       }
       rows.push({
         asin,
+        image,
+        title,
         bsr: bsr || 0,
         bsr_30d: bsr30,
         bsr_90d: bsr90,
         bsr_365d: bsr365,
-        drops_30d: drops || 0,
+        // Keep original number and whether it's a percentage — UI can decide how to render
+        drops_30d: dropsRaw || 0,
+        drops_is_pct: dropsIsPct,
         rating: rating,
         reviews: reviews,
         monthly_sold: monthly,
@@ -1625,16 +2208,174 @@ function BsrTrackerPage({ onBack }) {
           setToast({ type:"error", msg:`⚠️ No valid rows found in ${file.name}` });
           return;
         }
-        setUploadedData(prev => ({ ...prev, [brand]: rows }));
-        setUploadTimestamps(prev => ({ ...prev, [brand]: new Date() }));
+        const date = todayStr();
+        setSnapshots(prev => ({
+          ...prev,
+          [date]: { ...(prev[date] || {}), [brand]: rows }
+        }));
+        setViewDate(date);
+        setCompareDate(null);
         setBsrPageNum(1);
-        setToast({ type:"success", msg:`✅ ${brand} updated — ${rows.length} ASINs loaded` });
+        setToast({ type:"success", msg:`✅ ${brand} · ${formatDateShort(date)} — ${rows.length} ASINs loaded` });
       } catch (err) {
         setToast({ type:"error", msg:`❌ Failed to parse: ${err.message}` });
       }
     };
     reader.onerror = () => setToast({ type:"error", msg:`❌ Could not read ${file.name}` });
     reader.readAsText(file);
+  };
+
+  // Step 1: Scan picked files, group by detected date, open picker dialog.
+  // User chooses which date(s) to upload, then processUploadForDates runs.
+  const handleFolderUpload = (fileList) => {
+    const files = Array.from(fileList || []).filter(f => f.name.toLowerCase().endsWith(".csv"));
+    if (files.length === 0) {
+      setToast({ type:"error", msg:"⚠️ No CSV files found" });
+      return;
+    }
+
+    // Group files by detected date. Files with no parseable date fall into "today".
+    const filesByDate = {};
+    const noDateFiles = [];
+    files.forEach(file => {
+      const dateFromName = extractDateFromFilename(file.name);
+      const dateFromPath = file.webkitRelativePath ? extractDateFromFilename(file.webkitRelativePath) : null;
+      const date = dateFromName || dateFromPath;
+      if (date) {
+        (filesByDate[date] ||= []).push(file);
+      } else {
+        noDateFiles.push(file);
+      }
+    });
+
+    // If we have files with no date, bucket them under today
+    if (noDateFiles.length > 0) {
+      const today = todayStr();
+      (filesByDate[today] ||= []).push(...noDateFiles);
+    }
+
+    const dateOptions = Object.keys(filesByDate).sort().reverse();
+    if (dateOptions.length === 0) {
+      setToast({ type:"error", msg:"⚠️ No dates detected in files" });
+      return;
+    }
+
+    // If only 1 date detected, just process it silently — no dialog needed
+    if (dateOptions.length === 1) {
+      processUploadForDates(filesByDate, [dateOptions[0]]);
+      return;
+    }
+
+    // Multiple dates → show picker dialog
+    setPendingUpload({ filesByDate, dateOptions });
+  };
+
+  // Step 2: Actually read + parse files for chosen dates and save to snapshots.
+  const processUploadForDates = (filesByDate, chosenDates) => {
+    const allJobs = [];
+    chosenDates.forEach(date => {
+      (filesByDate[date] || []).forEach(file => {
+        allJobs.push({ date, file });
+      });
+    });
+    if (allJobs.length === 0) {
+      setToast({ type:"error", msg:"⚠️ No files to upload" });
+      return;
+    }
+
+    // brandsByDate = { "2026-04-23": { "Audio Array": [rows], ... }, ... }
+    const brandsByDate = {};
+    const errors = [];
+    let remaining = allJobs.length;
+
+    allJobs.forEach(({ date, file }) => {
+      // Detect brand from filename or folder path
+      let brand = detectBrandFromFilename(file.name);
+      if (!brand && file.webkitRelativePath) {
+        brand = detectBrandFromFilename(file.webkitRelativePath);
+      }
+      if (!brand) {
+        errors.push(`No brand detected: ${file.webkitRelativePath || file.name}`);
+        if (--remaining === 0) finalize();
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const rows = parseKeepaCsv(e.target.result);
+          if (rows.length > 0) {
+            brandsByDate[date] ||= {};
+            // If multiple files match the same brand+date, prefer the one WITH images
+            const existing = brandsByDate[date][brand];
+            const newHasImages = rows.some(r => r.image);
+            const existingHasImages = existing ? existing.some(r => r.image) : false;
+            if (!existing ||
+                (newHasImages && !existingHasImages) ||
+                (newHasImages === existingHasImages && rows.length > existing.length)) {
+              brandsByDate[date][brand] = rows;
+            }
+          } else {
+            errors.push(`No rows in ${file.name}`);
+          }
+        } catch (err) {
+          errors.push(`${file.name}: ${err.message}`);
+        }
+        if (--remaining === 0) finalize();
+      };
+      reader.onerror = () => {
+        errors.push(`Could not read ${file.name}`);
+        if (--remaining === 0) finalize();
+      };
+      reader.readAsText(file);
+    });
+
+    const finalize = () => {
+      const dates = Object.keys(brandsByDate);
+      if (dates.length === 0) {
+        setToast({ type:"error", msg:`❌ Upload failed. ${errors[0] || ""}` });
+        return;
+      }
+      // Overwrite existing snapshots for each date (user confirmed overwrite)
+      setSnapshots(prev => {
+        const next = { ...prev };
+        dates.forEach(date => {
+          next[date] = { ...(next[date] || {}), ...brandsByDate[date] };
+        });
+        return next;
+      });
+
+      // Jump view to today if today was uploaded, else latest uploaded date
+      const today = todayStr();
+      const target = dates.includes(today) ? today : dates.sort().reverse()[0];
+      setViewDate(target);
+      setCompareDate(null);
+      setBsrPageNum(1);
+
+      // Build summary toast
+      const totalBrands  = dates.reduce((s,d) => s + Object.keys(brandsByDate[d]).length, 0);
+      const totalRows    = dates.reduce((s,d) => s + Object.values(brandsByDate[d]).reduce((x,r)=>x+r.length,0), 0);
+      const dateLabel    = dates.length === 1 ? formatDateShort(dates[0]) : `${dates.length} dates`;
+      setToast({
+        type:"success",
+        msg:`✅ ${dateLabel} · ${totalBrands} file${totalBrands>1?"s":""} · ${totalRows} ASINs${errors.length?` (${errors.length} skipped)`:""}`
+      });
+    };
+  };
+
+  const deleteSnapshot = (date) => {
+    if (!window.confirm(`Delete all BSR data for ${formatDateShort(date)}?`)) return;
+    setSnapshots(prev => {
+      const next = { ...prev };
+      delete next[date];
+      return next;
+    });
+    if (viewDate === date) {
+      const remaining = Object.keys(snapshots).filter(d => d !== date).sort().reverse();
+      setViewDate(remaining[0] || null);
+    }
+    if (compareDate === date) setCompareDate(null);
+    setToast({ type:"success", msg:`🗑️ Deleted ${formatDateShort(date)}` });
   };
 
   const exportCsv = () => {
@@ -1675,6 +2416,29 @@ function BsrTrackerPage({ onBack }) {
 
       {modalRow && <BsrGraphModal row={modalRow} onClose={()=>setModalRow(null)} />}
 
+      {/* Keepa-style hover popup on ASIN */}
+      {hoverRow && (
+        <BsrHoverChart
+          row={hoverRow}
+          x={hoverPos.x}
+          y={hoverPos.y}
+          title={ASIN_TITLE_MAP[hoverRow.asin] || null}
+        />
+      )}
+
+      {/* ── Upload date picker dialog ─────────────────────────────────── */}
+      {pendingUpload && (
+        <UploadDatePicker
+          pendingUpload={pendingUpload}
+          existingDates={new Set(availableDates)}
+          onCancel={() => setPendingUpload(null)}
+          onConfirm={(chosenDates) => {
+            processUploadForDates(pendingUpload.filesByDate, chosenDates);
+            setPendingUpload(null);
+          }}
+        />
+      )}
+
       {/* Top Header — matches Smart View */}
       <div style={{ background:T.surface, borderBottom:`1px solid ${T.border}`, padding:"0 24px", display:"flex", alignItems:"center", justifyContent:"space-between", minHeight:64 }}>
         <div style={{ display:"flex", alignItems:"center", gap:10 }}>
@@ -1708,6 +2472,173 @@ function BsrTrackerPage({ onBack }) {
         </div>
       </div>
 
+      {/* ── DAILY SNAPSHOTS CALENDAR BAR ─────────────────────────────────── */}
+      <div style={{ background:T.surface, borderBottom:`1px solid ${T.border}`, padding:"10px 24px" }}>
+        <div style={{ display:"flex", gap:12, alignItems:"center", flexWrap:"wrap" }}>
+
+          {/* Refresh / Upload Today's Data (folder or multi-file) */}
+          <label style={{
+            display:"inline-flex", alignItems:"center", gap:6,
+            background:"linear-gradient(135deg,#2563EB,#1D4ED8)", color:"#fff",
+            padding:"8px 14px", borderRadius:8, fontSize:11, fontWeight:700,
+            cursor:"pointer", boxShadow:"0 2px 6px rgba(37,99,235,0.3)", whiteSpace:"nowrap"
+          }} title="Select a folder containing all 4 brand CSVs, or pick multiple CSV files at once. Files are auto-matched to brand by filename.">
+            <span style={{ fontSize:13 }}>📁</span> Refresh Today's Data
+            <input type="file" accept=".csv" multiple
+              webkitdirectory=""
+              directory=""
+              style={{ display:"none" }}
+              onChange={e => {
+                handleFolderUpload(e.target.files);
+                e.target.value = "";
+              }}
+            />
+          </label>
+
+          {/* Multi-file pick (fallback for folder-blocked browsers) */}
+          <label style={{
+            display:"inline-flex", alignItems:"center", gap:6,
+            background:T.surface, color:T.textSoft, border:`1px solid ${T.border}`,
+            padding:"8px 12px", borderRadius:8, fontSize:11, fontWeight:700,
+            cursor:"pointer", whiteSpace:"nowrap"
+          }} title="Pick multiple CSVs at once (Ctrl+click / Shift+click).">
+            <span style={{ fontSize:13 }}>📄</span> Pick Files
+            <input type="file" accept=".csv" multiple
+              style={{ display:"none" }}
+              onChange={e => {
+                handleFolderUpload(e.target.files);
+                e.target.value = "";
+              }}
+            />
+          </label>
+
+          <div style={{ width:1, height:28, background:T.border }} />
+
+          {/* ── Date picker group ─────────────────────────────────────── */}
+          <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+
+            {/* Calendar popover trigger */}
+            <div style={{ position:"relative" }}>
+              <button onClick={() => setCalendarOpen(o => !o)}
+                style={{
+                  display:"inline-flex", alignItems:"center", gap:7,
+                  background: calendarOpen ? "#EFF6FF" : T.surface,
+                  color: calendarOpen ? "#1D4ED8" : T.text,
+                  border: `1px solid ${calendarOpen ? "#93C5FD" : T.border}`,
+                  padding:"8px 14px", borderRadius:8, fontSize:11, fontWeight:700, cursor:"pointer",
+                  whiteSpace:"nowrap", minWidth:160, justifyContent:"space-between",
+                }}>
+                <span style={{ display:"inline-flex", alignItems:"center", gap:7 }}>
+                  <span style={{ fontSize:14 }}>📅</span>
+                  {viewDate ? (
+                    <span>
+                      <span style={{ color:T.textFaint, fontWeight:600, marginRight:5 }}>Viewing:</span>
+                      <span style={{ color:"#1D4ED8", fontFamily:"'DM Mono',monospace" }}>{formatDateShort(viewDate)}</span>
+                      {viewDate === todayStr() && (
+                        <span style={{ background:"#DCFCE7", color:"#166534", padding:"1px 6px", borderRadius:10, fontSize:9, marginLeft:6 }}>TODAY</span>
+                      )}
+                    </span>
+                  ) : (
+                    <span style={{ color:T.textFaint, fontStyle:"italic" }}>No data yet</span>
+                  )}
+                </span>
+                <span style={{ fontSize:9, color:T.textFaint }}>▼</span>
+              </button>
+
+              {calendarOpen && (
+                <MiniCalendar
+                  value={viewDate}
+                  uploadedSet={new Set(availableDates)}
+                  onPick={(iso) => {
+                    setViewDate(iso);
+                    setBsrPageNum(1);
+                    setCalendarOpen(false);
+                  }}
+                  onClose={() => setCalendarOpen(false)}
+                />
+              )}
+            </div>
+
+            {/* Today quick jump */}
+            <button
+              onClick={() => {
+                const t = todayStr();
+                if (availableDates.includes(t)) {
+                  setViewDate(t);
+                  setBsrPageNum(1);
+                  setToast({ type:"success", msg:`📅 Jumped to Today (${formatDateShort(t)})` });
+                } else {
+                  setToast({ type:"error", msg:`⚠️ No data uploaded for today yet` });
+                }
+              }}
+              disabled={!availableDates.includes(todayStr())}
+              style={{
+                background: viewDate === todayStr() ? "#DCFCE7" : availableDates.includes(todayStr()) ? "#fff" : T.surfaceMuted,
+                color:      viewDate === todayStr() ? "#166534" : availableDates.includes(todayStr()) ? T.text : T.textFaint,
+                border: `1px solid ${viewDate === todayStr() ? "#86EFAC" : T.border}`,
+                padding:"8px 14px", borderRadius:8, fontSize:11, fontWeight:800,
+                cursor: availableDates.includes(todayStr()) ? "pointer" : "not-allowed",
+                whiteSpace:"nowrap",
+              }}>
+              ⚡ Today
+            </button>
+
+            {/* Compare toggle */}
+            {availableDates.length >= 2 && (
+              <button
+                onClick={() => {
+                  if (compareMode) {
+                    setCompareMode(false);
+                    setCompareDate(null);
+                  } else {
+                    // Pick the most recent date that isn't the current view
+                    const other = availableDates.find(d => d !== viewDate);
+                    setCompareDate(other || null);
+                    setCompareMode(true);
+                  }
+                }}
+                style={{
+                  background: compareMode ? "#FEF3C7" : T.surface,
+                  color:      compareMode ? "#92400E" : T.text,
+                  border: `1px solid ${compareMode ? "#F59E0B" : T.border}`,
+                  padding:"8px 14px", borderRadius:8, fontSize:11, fontWeight:700, cursor:"pointer",
+                  whiteSpace:"nowrap",
+                }}>
+                {compareMode ? "✕ Exit Compare" : "🔍 Compare Dates"}
+              </button>
+            )}
+
+            {/* Record count badge */}
+            <span style={{ fontSize:10, color:T.textFaint, fontFamily:"'DM Mono',monospace", fontWeight:700 }}>
+              {availableDates.length} {availableDates.length === 1 ? "date" : "dates"} saved
+            </span>
+          </div>
+        </div>
+
+        {/* ── Compare Mode banner + Date B picker ──────────────────────── */}
+        {compareMode && (
+          <div style={{ marginTop:8, padding:"8px 12px", background:"#FFFBEB", border:"1px solid #FCD34D", borderRadius:8, display:"flex", gap:12, alignItems:"center", flexWrap:"wrap" }}>
+            <span style={{ fontSize:11, fontWeight:800, color:"#92400E" }}>🔍 Compare Mode</span>
+            <span style={{ fontSize:11, color:"#92400E" }}>
+              <span style={{ color:"#2563EB", fontWeight:800 }}>{formatDateShort(viewDate)}</span>
+              {" vs "}
+            </span>
+            <select
+              value={compareDate || ""}
+              onChange={e => setCompareDate(e.target.value || null)}
+              style={{ background:"#fff", border:"1px solid #F59E0B", borderRadius:6, padding:"4px 10px", fontSize:11, color:"#92400E", fontWeight:800, cursor:"pointer", outline:"none" }}>
+              <option value="">— pick date —</option>
+              {availableDates.filter(d => d !== viewDate).map(d => (
+                <option key={d} value={d}>{formatDateShort(d)}</option>
+              ))}
+            </select>
+            <span style={{ fontSize:10, color:"#92400E", fontStyle:"italic" }}>
+              green ↑ = rank improved · red ↓ = rank worsened (lower rank = better on Amazon)
+            </span>
+          </div>
+        )}
+      </div>
+
       {/* Filter Bar — matches Smart View */}
       <div style={{ background:T.shellBg, borderBottom:`1px solid ${T.border}`, padding:"12px 24px", display:"flex", gap:10, alignItems:"center", flexWrap:"wrap" }}>
         <div style={{ position:"relative", flex:"0 0 auto" }}>
@@ -1720,12 +2651,12 @@ function BsrTrackerPage({ onBack }) {
           />
         </div>
         {/* Brand pill filter */}
-        <div style={{ display:"flex", gap:6, alignItems:"center", padding:"7px 12px", borderRadius:8, background: bsrBrand!=="All" ? "#0F172A" : T.surface, border:`1px solid ${bsrBrand!=="All" ? "#0F172A" : T.border}` }}>
-          <span style={{ fontSize:10, color: bsrBrand!=="All" ? "#94A3B8" : T.textFaint, fontFamily:"'DM Mono',monospace", fontWeight:700, letterSpacing:1 }}>BRAND</span>
+        <div style={{ display:"flex", gap:6, alignItems:"center", padding:"7px 12px", borderRadius:8, background: bsrBrand!=="All" ? "#EFF6FF" : T.surface, border:`1px solid ${bsrBrand!=="All" ? "#3B82F6" : T.border}` }}>
+          <span style={{ fontSize:10, color: bsrBrand!=="All" ? "#2563EB" : T.textFaint, fontFamily:"'DM Mono',monospace", fontWeight:700, letterSpacing:1 }}>BRAND</span>
           <select value={bsrBrand} onChange={e=>{setBsrBrand(e.target.value); setBsrPageNum(1);}}
-            style={{ background:"transparent", border:"none", color: bsrBrand!=="All" ? "#fff" : T.text, padding:"1px 20px 1px 2px", fontSize:12, fontWeight:600, outline:"none", appearance:"none", cursor:"pointer", backgroundImage:`url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%2394A3B8' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E")`, backgroundRepeat:"no-repeat", backgroundPosition:"right 4px center" }}>
+            style={{ background:"transparent", border:"none", color: bsrBrand!=="All" ? "#1D4ED8" : T.text, padding:"1px 20px 1px 2px", fontSize:12, fontWeight:600, outline:"none", appearance:"none", cursor:"pointer", backgroundImage:`url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%2394A3B8' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E")`, backgroundRepeat:"no-repeat", backgroundPosition:"right 4px center" }}>
             {allBrands.map(b=>(
-              <option key={b} value={b} style={{ color:"#0F172A" }}>{b === "All" ? "All Brands" : b}</option>
+              <option key={b} value={b} style={{ color:"#0F172A", background:"#FFFFFF" }}>{b === "All" ? "All Brands" : b}</option>
             ))}
           </select>
         </div>
@@ -1877,8 +2808,22 @@ function BsrTrackerPage({ onBack }) {
             const tier = getBsrTier(row.bsr);
             const trendColor = row.trend==="up"?"#059669":row.trend==="down"?"#DC2626":"#9CA3AF";
             const trendLabel = row.trend==="up"?"↑ Improving":row.trend==="down"?"↓ Declining":"→ Stable";
-            const footfallColor = (row.drops_30d||0)>=20?"#059669":(row.drops_30d||0)>=8?"#D97706":"#DC2626";
-            const footfallLabel = (row.drops_30d||0)>=20?"sells daily":(row.drops_30d||0)>=8?"few/week":"slow";
+            // Drops can be either a count (old Keepa export) or a % (new export).
+            // Keepa's "30 days drop %" is: negative = BSR improved (fewer drops = sales down? actually
+            // Keepa shows this as % change in rank — negative = rank got better. We treat negative/bigger-negative as good.)
+            const dropVal = row.drops_30d || 0;
+            let footfallColor, footfallLabel, footfallText;
+            if (row.drops_is_pct) {
+              // Percentage: negative = rank improved (good), positive = rank worsened (bad)
+              footfallColor = dropVal < -10 ? "#059669" : dropVal > 10 ? "#DC2626" : "#D97706";
+              footfallLabel = dropVal < -10 ? "rank ↑" : dropVal > 10 ? "rank ↓" : "stable";
+              footfallText  = `${dropVal > 0 ? "+" : ""}${dropVal}%`;
+            } else {
+              // Count: higher = more sales = good
+              footfallColor = dropVal >= 20 ? "#059669" : dropVal >= 8 ? "#D97706" : "#DC2626";
+              footfallLabel = dropVal >= 20 ? "sells daily" : dropVal >= 8 ? "few/week" : "slow";
+              footfallText  = `${dropVal} drops`;
+            }
             const stars = row.rating ? Math.round(row.rating) : 0;
             const globalRank = (curPage-1)*PAGE_SIZE + i + 1;
             return (
@@ -1889,6 +2834,33 @@ function BsrTrackerPage({ onBack }) {
 
                 {/* # */}
                 <td style={{ padding:"9px 8px", fontSize:10, color:T.textFaint, fontWeight:600 }}>{globalRank}</td>
+
+                {/* Image thumbnail */}
+                <td style={{ padding:"6px 4px", textAlign:"center" }}>
+                  {row.image ? (
+                    <img src={row.image} alt="" loading="lazy"
+                      onError={(e) => { e.currentTarget.style.display = "none"; }}
+                      style={{ width:38, height:38, objectFit:"contain", borderRadius:4, background:"#F9FAFB", border:`1px solid ${T.border}` }} />
+                  ) : (
+                    <div style={{ width:38, height:38, borderRadius:4, background:T.surfaceMuted, border:`1px dashed ${T.border}`, display:"inline-flex", alignItems:"center", justifyContent:"center", fontSize:14, color:T.textFaint }}>📦</div>
+                  )}
+                </td>
+
+                {/* Title — truncated in cell, hover opens Keepa popup */}
+                <td style={{ padding:"9px 10px", maxWidth:240 }}
+                  onMouseEnter={(e) => { setHoverRow(row); setHoverPos({ x: e.clientX, y: e.clientY }); }}
+                  onMouseMove={(e) => setHoverPos({ x: e.clientX, y: e.clientY })}
+                  onMouseLeave={() => setHoverRow(null)}>
+                  <div title={row.title || row.asin}
+                    style={{
+                      fontSize:11, fontWeight:600, color:T.text,
+                      overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
+                      maxWidth:230, cursor:"pointer",
+                      borderBottom: row.title ? "1px dashed #93C5FD" : "none",
+                    }}>
+                    {row.title || <span style={{ color:T.textFaint, fontStyle:"italic" }}>— no title —</span>}
+                  </div>
+                </td>
 
                 {/* ASIN */}
                 <td style={{ padding:"9px 10px" }}>
@@ -1905,6 +2877,45 @@ function BsrTrackerPage({ onBack }) {
                   <div style={{ fontSize:13, fontWeight:800, color:tier.color, fontFamily:"monospace" }}>#{row.bsr.toLocaleString("en-IN")}</div>
                   <div style={{ fontSize:9, color:tier.color, fontWeight:600, marginTop:1 }}>{tier.emoji} {tier.label}</div>
                 </td>
+
+                {/* Compare-mode cells */}
+                {compareMode && compareDate && (
+                  <>
+                    {/* Rank on Date B */}
+                    <td style={{ padding:"9px 10px", fontSize:12, fontWeight:700, color:T.textSoft, fontFamily:"monospace" }}>
+                      {row.bsr_B ? `#${row.bsr_B.toLocaleString("en-IN")}` : "—"}
+                    </td>
+                    {/* Δ Rank (negative = improved because lower rank is better) */}
+                    <td style={{ padding:"9px 10px" }}>
+                      {row.bsr_delta === null || row.bsr_delta === undefined ? (
+                        <span style={{ color:T.textFaint, fontSize:11 }}>—</span>
+                      ) : (() => {
+                        const improved = row.bsr_delta < 0;
+                        const color = row.bsr_delta === 0 ? "#6B7280" : improved ? "#059669" : "#DC2626";
+                        const arrow = row.bsr_delta === 0 ? "→" : improved ? "↑" : "↓";
+                        return (
+                          <span style={{ fontSize:12, fontWeight:800, color, fontFamily:"monospace" }}>
+                            {arrow} {Math.abs(row.bsr_delta).toLocaleString("en-IN")}
+                          </span>
+                        );
+                      })()}
+                    </td>
+                    {/* Δ % */}
+                    <td style={{ padding:"9px 10px" }}>
+                      {row.bsr_delta_pct === null || row.bsr_delta_pct === undefined ? (
+                        <span style={{ color:T.textFaint, fontSize:11 }}>—</span>
+                      ) : (() => {
+                        const improved = row.bsr_delta_pct < 0;
+                        const color = Math.abs(row.bsr_delta_pct) < 0.5 ? "#6B7280" : improved ? "#059669" : "#DC2626";
+                        return (
+                          <span style={{ fontSize:11, fontWeight:700, color, fontFamily:"monospace" }}>
+                            {row.bsr_delta_pct > 0 ? "+" : ""}{row.bsr_delta_pct.toFixed(1)}%
+                          </span>
+                        );
+                      })()}
+                    </td>
+                  </>
+                )}
 
                 {/* Trend */}
                 <td style={{ padding:"9px 10px" }}>
@@ -1933,7 +2944,7 @@ function BsrTrackerPage({ onBack }) {
 
                 {/* Footfall */}
                 <td style={{ padding:"9px 10px" }}>
-                  <span style={{ fontSize:11, fontWeight:700, color:footfallColor }}>{row.drops_30d} drops</span>
+                  <span style={{ fontSize:11, fontWeight:700, color:footfallColor }}>{footfallText}</span>
                   <span style={{ fontSize:9, color:T.textMuted, marginLeft:4 }}>({footfallLabel})</span>
                 </td>
 
@@ -1945,43 +2956,18 @@ function BsrTrackerPage({ onBack }) {
             );
           })}
           {paged.length === 0 && (
-            <tr><td colSpan={10} style={{ padding:40, textAlign:"center", color:T.textMuted, fontSize:13 }}>No ASINs match your filters</td></tr>
+            <tr><td colSpan={COLUMNS.length} style={{ padding:40, textAlign:"center", color:T.textMuted, fontSize:13 }}>No ASINs match your filters</td></tr>
           )}
               </tbody>
             </table>
           </div>
         </div>
 
-        {/* Fixed Bottom toolbar: Uploads · Export · Pagination */}
+        {/* Fixed Bottom toolbar: Export · Pagination (upload moved to top bar) */}
         <div style={{ position:"fixed", left:0, right:0, bottom:0, zIndex:90,
                       padding:"10px 24px", borderTop:`1px solid ${T.border}`,
                       display:"flex", alignItems:"center", gap:12, flexWrap:"wrap",
                       background:T.surface, boxShadow:"0 -4px 14px rgba(15,23,42,0.06)" }}>
-          {/* Upload buttons per brand */}
-          <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
-            <span style={{ fontSize:9, color:T.textFaint, fontFamily:"'DM Mono',monospace", fontWeight:700, letterSpacing:1 }}>UPLOAD KEEPA CSV</span>
-            {["Audio Array","Nexlev","Tonor","White Mulberry"].map(b => {
-              const bc = BRAND_META[b] || { accent:"#6B7280", light:"#F9FAFB", text:"#4B5563" };
-              const uploaded = !!uploadedData[b];
-              return (
-                <label key={b}
-                  style={{ display:"inline-flex", alignItems:"center", gap:5, padding:"5px 10px", borderRadius:7, fontSize:10, fontWeight:700, cursor:"pointer",
-                           background: uploaded ? bc.light : T.surface,
-                           border: `1px solid ${uploaded ? bc.accent : T.border}`,
-                           color: uploaded ? bc.text : T.textSoft,
-                           transition:"all 0.15s", whiteSpace:"nowrap" }}
-                  title={uploaded ? `${b} replaced with uploaded data — refresh to reset` : `Upload ${b} Keepa CSV`}>
-                  <span style={{ fontSize:11 }}>{uploaded ? "✓" : "↑"}</span> {b}
-                  <input type="file" accept=".csv" style={{ display:"none" }}
-                    onChange={e => {
-                      handleBrandUpload(b, e.target.files?.[0]);
-                      e.target.value = ""; // allow re-upload of same file
-                    }} />
-                </label>
-              );
-            })}
-          </div>
-
           {/* Export */}
           <button onClick={exportCsv}
             style={{ background:T.panelBg, border:`1px solid ${T.border}`, borderRadius:7, padding:"6px 12px", fontSize:11, color:T.textSoft, fontWeight:700, cursor:"pointer", whiteSpace:"nowrap" }}>
@@ -2520,36 +3506,26 @@ export default function Dashboard() {
   };
   const openComparePage = (asin) => {
     if (!asin) return;
-    const compareUrl = `${window.location.pathname}${window.location.search}#compare/${encodeURIComponent(asin)}?m1=${compareM1}&m2=${compareM2}`;
-    window.open(compareUrl, "_blank", "noopener,noreferrer");
+    window.location.hash = `compare/${encodeURIComponent(asin)}?m1=${compareM1}&m2=${compareM2}`;
   };
   const openSmartViewPage = (tabKey = SMART_VIEW_TABS[0].key) => {
-    const smartUrl = `${window.location.pathname}${window.location.search}#smart-views/${tabKey}`;
-    window.open(smartUrl, "_blank", "noopener,noreferrer");
+    window.location.hash = `smart-views/${tabKey}`;
   };
   const switchSmartViewTab = (tabKey) => {
     setSmartViewTab(tabKey);
-    window.location.hash = `smart-views/${tabKey}`;
+    // Use replaceState so switching tabs doesn't pile up history entries.
+    // This way, one Back click always returns to dashboard regardless of how many tabs you clicked.
+    const newUrl = `${window.location.pathname}${window.location.search}#smart-views/${tabKey}`;
+    window.history.replaceState(null, "", newUrl);
   };
   const closeDetailPage = () => {
-    const dashboardUrl = `${window.location.pathname}${window.location.search}`;
-    if (window.location.hash.startsWith("#smart-views")) {
-      window.location.href = dashboardUrl;
-      return;
+    // Clear hash directly — always returns to main dashboard in one click,
+    // regardless of tab history. Fires hashchange event → React updates state → no reload.
+    if (window.location.hash) {
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      // Manually dispatch hashchange since replaceState doesn't fire it
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
     }
-    if (window.opener) {
-      window.close();
-      return;
-    }
-    if (window.location.hash.startsWith("#asin/") || window.location.hash.startsWith("#compare/")) {
-      if (window.history.length > 1) {
-        window.history.back();
-        return;
-      }
-      window.location.href = dashboardUrl;
-      return;
-    }
-    window.location.href = dashboardUrl;
   };
   const exportFilteredData = () => {
     const exportColumns = [

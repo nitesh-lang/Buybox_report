@@ -21,12 +21,14 @@ CONFIGS = {
     },
     "Tonor": {
         "months": {
+            "Jan": {"biz": "Tonor/Jan/business_report.csv", "ads": "Tonor/Jan/Sp&Sd.xlsx", "p1": "Tonor/Jan/1Psales.csv"},
             "Feb": {"biz": "Tonor/Feb/business_report.xlsx", "ads": "Tonor/Feb/Sp&Sd.xlsx", "p1": "Tonor/Feb/1PSales.csv"},
             "Mar": {"biz": "Tonor/Mar/business_report.xlsx", "ads": "Tonor/Mar/Sp&Sd.xlsx", "p1": "Tonor/Mar/1Psales.csv"},
         }
     },
     "White Mulberry": {
         "months": {
+            "Jan": {"biz": "White Mulberry/Jan/business_report.csv", "ads": "White Mulberry/Jan/Sp&Sd.xlsx", "p1": "White Mulberry/Jan/1Psales.csv"},
             "Feb": {"biz": "White Mulberry/Feb/business_report.xlsx", "ads": "White Mulberry/Feb/Sp&Sd.xlsx", "p1": "White Mulberry/Feb/1Psales.csv"},
             "Mar": {"biz": "White Mulberry/Mar/business_report.xlsx", "ads": "White Mulberry/Mar/Sp&Sd.xlsx", "p1": "White Mulberry/Mar/1Psales.csv"},
         }
@@ -301,6 +303,19 @@ for b in CONFIGS:
 
 out_path = "./src/raw_data.json"
 os.makedirs("./src", exist_ok=True)
+
+# Clean NaN/Infinity values → 0 so the JSON is valid (browsers can't parse NaN/Infinity in JSON)
+import math
+def clean(obj):
+    if isinstance(obj, dict):
+        return {k: clean(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [clean(v) for v in obj]
+    if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+        return 0
+    return obj
+
+all_rows_clean = clean(all_rows)
 with open(out_path,"w") as f:
-    json.dump(all_rows, f, indent=2)
+    json.dump(all_rows_clean, f, indent=2, allow_nan=False)
 print(f"\nWritten to {out_path}")

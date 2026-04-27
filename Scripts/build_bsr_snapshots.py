@@ -187,9 +187,10 @@ def main():
 
     # Write output
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    OUT_PATH.write_text(json.dumps(snapshots, separators=(",", ":"), ensure_ascii=False))
+    OUT_PATH.write_text(json.dumps(snapshots, separators=(",", ":"), ensure_ascii=False), encoding="utf-8")
     size_kb = OUT_PATH.stat().st_size / 1024
     print(f"\n✅ Wrote {OUT_PATH.relative_to(PROJECT_ROOT)}  ({size_kb:.1f} KB)")
 
 if __name__ == "__main__":
     main()
+

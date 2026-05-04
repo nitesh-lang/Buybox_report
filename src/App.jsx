@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import Dashboard from "./nexlev_ads_dashboard";
 
-const LOGIN_USERNAME = "info@cambiumreatil.com";
+const LOGIN_USERNAME = "info@cambiumretail.com";
 const LOGIN_PASSWORD = "office@109";
 
 const HELP_ITEMS = [
@@ -34,7 +34,7 @@ function LoginScreen({ onLogin }) {
     }
 
     if (username.trim() !== LOGIN_USERNAME || password !== LOGIN_PASSWORD) {
-      setError("Use username info@cambiumreatil.com and password office@109.");
+      setError("Use username info@cambiumretail.com and password office@109.");
       return;
     }
 

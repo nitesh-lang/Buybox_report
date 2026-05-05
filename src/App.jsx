@@ -261,5 +261,5 @@ export default function App() {
     return <LoginScreen onLogin={() => setIsLoggedIn(true)} />;
   }
 
-  return <Dashboard />;
+  return <Dashboard onLogout={() => setIsLoggedIn(false)} />;
 }

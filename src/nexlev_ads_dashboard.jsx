@@ -2958,7 +2958,7 @@ function BsrTrackerPage({ onBack }) {
   );
 }
 
-export default function Dashboard() {
+export default function Dashboard({ onLogout }) {
   const [dataRows] = useState(RAW_DATA);
   const [masterData] = useState(MASTER_DATA);
   const [brand, setBrand]   = useState([]);
@@ -3073,7 +3073,7 @@ export default function Dashboard() {
   }, []);
 
   const brands = useMemo(() => [...new Set(dataRows.map((row) => row.Brand))].sort(), [dataRows]);
-  const months = ["All", "Jan", "Feb", "Mar"];
+  const months = ["All", "Jan", "Feb", "Mar", "Apr"];
   const brandScopedRows = useMemo(
     () => dataRows.filter((row) => brand.length === 0 || brand.includes(row.Brand)),
     [dataRows, brand]
@@ -3147,6 +3147,75 @@ export default function Dashboard() {
       (!q || (r.ASIN||"").toLowerCase().includes(q) || (typeof r.Title==="string"&&r.Title.toLowerCase().includes(q)) || (r.fbaSku||"").toLowerCase().includes(q) || (r.model||"").toLowerCase().includes(q))
     );
   }, [enriched, brand, month, cat, deferredSearch, masterData]);
+
+  const aggregatedRows = useMemo(() => {
+    if (month.length <= 1) return filtered;
+
+    const grouped = new Map();
+    filtered.forEach((row) => {
+      const key = `${row.Brand}|${row.ASIN}`;
+      const current = grouped.get(key);
+      if (!current) {
+        grouped.set(key, {
+          ...row,
+          Month: month.join("+"),
+          Sessions: row.Sessions ?? 0,
+          BuyboxPctWeightedTotal: (row.BuyboxPct ?? 0) * (row.Sessions ?? 0),
+          BuyboxPctWeight: row.Sessions ?? 0,
+          NetUnits: row.NetUnits ?? 0,
+          Units1P: row.Units1P ?? 0,
+          Units3P: row.Units3P ?? 0,
+          TotalNetSalesValue: row.TotalNetSalesValue ?? 0,
+          Rev1P: row.Rev1P ?? 0,
+          Rev3P: row.Rev3P ?? 0,
+          TotalAdsSpend: row.TotalAdsSpend ?? 0,
+          TotalAdsSales: row.TotalAdsSales ?? 0,
+          Impressions: row.Impressions ?? 0,
+          Clicks: row.Clicks ?? 0,
+          AmsOrders: row.AmsOrders ?? 0,
+          OrganiSales: row.OrganiSales ?? 0,
+        });
+        return;
+      }
+
+      current.Sessions += row.Sessions ?? 0;
+      current.BuyboxPctWeightedTotal += (row.BuyboxPct ?? 0) * (row.Sessions ?? 0);
+      current.BuyboxPctWeight += row.Sessions ?? 0;
+      current.NetUnits += row.NetUnits ?? 0;
+      current.Units1P += row.Units1P ?? 0;
+      current.Units3P += row.Units3P ?? 0;
+      current.TotalNetSalesValue += row.TotalNetSalesValue ?? 0;
+      current.Rev1P += row.Rev1P ?? 0;
+      current.Rev3P += row.Rev3P ?? 0;
+      current.TotalAdsSpend += row.TotalAdsSpend ?? 0;
+      current.TotalAdsSales += row.TotalAdsSales ?? 0;
+      current.Impressions += row.Impressions ?? 0;
+      current.Clicks += row.Clicks ?? 0;
+      current.AmsOrders += row.AmsOrders ?? 0;
+      current.OrganiSales += row.OrganiSales ?? 0;
+    });
+
+    return [...grouped.values()].map((row) => {
+      const buyboxPct = row.BuyboxPctWeight > 0 ? row.BuyboxPctWeightedTotal / row.BuyboxPctWeight : row.BuyboxPct ?? 0;
+      const totalSales = row.TotalNetSalesValue ?? 0;
+      const adSales = row.TotalAdsSales ?? 0;
+      const adSpend = row.TotalAdsSpend ?? 0;
+      const units = row.NetUnits ?? 0;
+      const sessions = row.Sessions ?? 0;
+      const organicSales = Math.max(0, totalSales - adSales);
+
+      const { BuyboxPctWeightedTotal, BuyboxPctWeight, ...cleanRow } = row;
+      return {
+        ...cleanRow,
+        BuyboxPct: buyboxPct,
+        ACOS: adSales > 0 ? adSpend / adSales : 0,
+        TACOS: totalSales > 0 ? adSpend / totalSales : 0,
+        CAC: (row.AmsOrders ?? 0) > 0 ? adSpend / row.AmsOrders : 0,
+        ConversionPct: sessions > 0 ? units / sessions : 0,
+        OrganicPct: totalSales > 0 ? organicSales / totalSales : 0,
+      };
+    });
+  }, [filtered, month]);
 
   const comparePool = useMemo(() => {
     return enriched.filter((row) =>
@@ -3325,12 +3394,12 @@ export default function Dashboard() {
   const sorted = useMemo(() => {
     const col = COLS.find(c => c.key === sortKey);
     const isMaster = col?.master;
-    return [...filtered].sort((a, b) => {
+    return [...aggregatedRows].sort((a, b) => {
       const av = isMaster ? getMasterValue(a, sortKey) : (a[sortKey] ?? null);
       const bv = isMaster ? getMasterValue(b, sortKey) : (b[sortKey] ?? null);
       return compareValues(av, bv, sortDir);
     });
-  }, [filtered, sortKey, sortDir]);
+  }, [aggregatedRows, sortKey, sortDir]);
 
   const visibleRows = sorted;
   const totalPages = Math.max(1, Math.ceil(visibleRows.length / TABLE_PAGE_SIZE));
@@ -3445,22 +3514,23 @@ export default function Dashboard() {
   const trendPct = (curr, prev) => prev > 0 ? ((curr - prev) / prev) * 100 : null;
 
   const ACCENT = "#3B82F6";
+  const openAppTab = (hash) => {
+    window.open(`${window.location.pathname}${window.location.search}${hash}`, "_blank", "noopener,noreferrer");
+  };
   const openDetailPage = (asin) => {
     if (!asin) return;
-    const detailUrl = `${window.location.pathname}${window.location.search}#asin/${encodeURIComponent(asin)}?m1=${compareM1}&m2=${compareM2}`;
-    window.open(detailUrl, "_blank", "noopener,noreferrer");
+    openAppTab(`#asin/${encodeURIComponent(asin)}?m1=${compareM1}&m2=${compareM2}`);
   };
   const openModelPage = (modelKey) => {
     if (!modelKey) return;
-    const modelUrl = `${window.location.pathname}${window.location.search}#model/${encodeURIComponent(modelKey)}`;
-    window.open(modelUrl, "_blank", "noopener,noreferrer");
+    openAppTab(`#model/${encodeURIComponent(modelKey)}`);
   };
   const openComparePage = (asin) => {
     if (!asin) return;
-    window.location.hash = `compare/${encodeURIComponent(asin)}?m1=${compareM1}&m2=${compareM2}`;
+    openAppTab(`#compare/${encodeURIComponent(asin)}?m1=${compareM1}&m2=${compareM2}`);
   };
   const openSmartViewPage = (tabKey = SMART_VIEW_TABS[0].key) => {
-    window.location.hash = `smart-views/${tabKey}`;
+    openAppTab(`#smart-views/${tabKey}`);
   };
   const switchSmartViewTab = (tabKey) => {
     setSmartViewTab(tabKey);
@@ -3485,7 +3555,7 @@ export default function Dashboard() {
       "AmsOrders", "OrganiSales", "TotalAdsSpend", "TotalAdsSales", "ACOS", "TACOS", "CAC", "ConversionPct",
     ];
 
-    const sourceRows = smartViewPage ? smartViewRows : filtered;
+    const sourceRows = smartViewPage ? smartViewRows : aggregatedRows;
     const rows = sourceRows.map((row) => ({
       ...row,
       fbaSku: getMasterValue(row, "fbaSku"),
@@ -3602,7 +3672,7 @@ export default function Dashboard() {
             />
           </div>
           <MultiSelectFilter label="Brand" selected={brand} setSelected={(v)=>{setBrand(v);setTablePage(1);}} opts={brands.map(b=>({v:b,l:b}))} isActive={brand.length>0} />
-          <MultiSelectFilter label="Month" selected={month} setSelected={(v)=>{setMonth(v);setTablePage(1);}} opts={[{v:"Jan",l:"Jan"},{v:"Feb",l:"Feb"},{v:"Mar",l:"Mar"}]} isActive={month.length>0} />
+          <MultiSelectFilter label="Month" selected={month} setSelected={(v)=>{setMonth(v);setTablePage(1);}} opts={[{v:"Jan",l:"Jan"},{v:"Feb",l:"Feb"},{v:"Mar",l:"Mar"},{v:"Apr",l:"Apr"}]} isActive={month.length>0} />
           <MultiSelectFilter label="Category" selected={cat} setSelected={(v)=>{setCat(v);setTablePage(1);}} opts={cats.map(c=>({v:c,l:c}))} isActive={cat.length>0} />
           {/* Data Mode Toggle */}
           <div style={{ display:"flex", gap:0, borderRadius:8, border:`1px solid ${THEME.border}`, overflow:"hidden", flexShrink:0 }}>
@@ -4931,7 +5001,15 @@ export default function Dashboard() {
           >
             Export CSV
           </button>
-          <span style={{ fontSize: 10, color: THEME.textFaint, fontFamily: "'DM Mono',monospace" }}>{filtered.length} rows</span>
+          {onLogout && (
+            <button
+              onClick={onLogout}
+              style={{ background:"#FEF2F2", border:"1px solid #FECACA", borderRadius:8, padding:"7px 12px", fontSize:11, color:"#B91C1C", fontWeight:700, cursor:"pointer" }}
+            >
+              Logout
+            </button>
+          )}
+          <span style={{ fontSize: 10, color: THEME.textFaint, fontFamily: "'DM Mono',monospace" }}>{aggregatedRows.length} rows</span>
         </div>
       </div>
 
@@ -4946,7 +5024,7 @@ export default function Dashboard() {
           />
         </div>
         <MultiSelectFilter label="Brand" selected={brand} setSelected={(v)=>{setBrand(v);setCompareAsin("");setTablePage(1);}} opts={brands.map(b=>({v:b,l:b}))} isActive={brand.length>0} />
-        <MultiSelectFilter label="Month" selected={month} setSelected={(v)=>{setMonth(v);setTablePage(1);}} opts={[{v:"Jan",l:"Jan"},{v:"Feb",l:"Feb"},{v:"Mar",l:"Mar"}]} isActive={month.length>0} />
+        <MultiSelectFilter label="Month" selected={month} setSelected={(v)=>{setMonth(v);setTablePage(1);}} opts={[{v:"Jan",l:"Jan"},{v:"Feb",l:"Feb"},{v:"Mar",l:"Mar"},{v:"Apr",l:"Apr"}]} isActive={month.length>0} />
         <MultiSelectFilter label="Category" selected={cat} setSelected={(v)=>{setCat(v);setCompareAsin("");setTablePage(1);}} opts={cats.map(c=>({v:c,l:c}))} isActive={cat.length>0} />
         {/* Data Mode Toggle */}
         <div style={{ display:"flex", gap:0, borderRadius:8, border:`1px solid ${THEME.border}`, overflow:"hidden", flexShrink:0 }}>
@@ -4962,7 +5040,7 @@ export default function Dashboard() {
         </div>
         <div style={{ marginLeft:"auto", display:"flex", gap:8, alignItems:"center" }}>
           <span style={{ fontSize:11, color: activeFilterCount > 0 ? "#2563EB" : THEME.textFaint, fontFamily:"'DM Mono',monospace" }}>
-            {activeFilterCount > 0 ? `${activeFilterCount} filter${activeFilterCount>1?"s":""} active` : `${filtered.length} rows`}
+            {activeFilterCount > 0 ? `${activeFilterCount} filter${activeFilterCount>1?"s":""} active` : `${aggregatedRows.length} rows`}
           </span>
           <div style={{ display:"flex", gap:6, alignItems:"center", padding:"7px 10px", borderRadius:8, background:THEME.surface, border:`1px solid ${THEME.border}` }}>
             <span style={{ fontSize:10, color:THEME.textFaint, fontFamily:"'DM Mono',monospace", fontWeight:600 }}>SORT</span>
@@ -4992,7 +5070,7 @@ export default function Dashboard() {
             Smart View
           </button>
           <button
-            onClick={() => { window.location.hash = "bsr-tracker"; }}
+            onClick={() => openAppTab("#bsr-tracker")}
             style={{
               border:"none",
               borderBottom: bsrPage ? "2px solid #8B5CF6" : "2px solid transparent",

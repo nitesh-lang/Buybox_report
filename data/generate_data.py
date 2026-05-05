@@ -10,6 +10,7 @@ CONFIGS = {
             "Jan": {"biz": "Nexlev/Jan/business_report.csv",  "ads": "Nexlev/Jan/Sp&Sd.xlsx", "p1": "Nexlev/Jan/1Psales.csv"},
             "Feb": {"biz": "Nexlev/Feb/business_report.csv",  "ads": "Nexlev/Feb/Sp&Sd.xlsx", "p1": "Nexlev/Feb/1Psales.csv"},
             "Mar": {"biz": "Nexlev/Mar/business_report.csv",  "ads": "Nexlev/Mar/Sp&Sd.xlsx", "p1": "Nexlev/Mar/1Psales.csv"},
+            "Apr": {"biz": "Nexlev/Apr/business_report.xlsx",  "ads": "Nexlev/Apr/Sp&Sd.xlsx", "p1": "Nexlev/Apr/1Psales.csv"},
         }
     },
     "Audio Array": {
@@ -17,6 +18,7 @@ CONFIGS = {
             "Jan": {"biz": "Audio array/Jan/business_report.csv",  "ads": "Audio array/Jan/Sp&Sd.xlsx", "p1": "Audio array/Jan/1Psales.csv"},
             "Feb": {"biz": "Audio array/Feb/business_report.csv",  "ads": "Audio array/Feb/Sp&Sd.xlsx", "p1": "Audio array/Feb/1Psales.csv"},
             "Mar": {"biz": "Audio array/Mar/business_report.csv",  "ads": "Audio array/Mar/Sp&Sd.xlsx", "p1": "Audio array/Mar/1Psales.csv"},
+            "Apr": {"biz": "Audio array/Apr/business_report.xlsx",  "ads": "Audio array/Apr/Sp&Sd.xlsx", "p1": "Audio array/Apr/1Psales.csv"},
         }
     },
     "Tonor": {
@@ -24,6 +26,7 @@ CONFIGS = {
             "Jan": {"biz": "Tonor/Jan/business_report.csv", "ads": "Tonor/Jan/Sp&Sd.xlsx", "p1": "Tonor/Jan/1Psales.csv"},
             "Feb": {"biz": "Tonor/Feb/business_report.xlsx", "ads": "Tonor/Feb/Sp&Sd.xlsx", "p1": "Tonor/Feb/1PSales.csv"},
             "Mar": {"biz": "Tonor/Mar/business_report.xlsx", "ads": "Tonor/Mar/Sp&Sd.xlsx", "p1": "Tonor/Mar/1Psales.csv"},
+            "Apr": {"biz": "Tonor/Apr/business_report.xlsx", "ads": "Tonor/Apr/Sp&Sd.xlsx", "p1": "Tonor/Apr/1Psales.csv"},
         }
     },
     "White Mulberry": {
@@ -31,6 +34,7 @@ CONFIGS = {
             "Jan": {"biz": "White Mulberry/Jan/business_report.csv", "ads": "White Mulberry/Jan/Sp&Sd.xlsx", "p1": "White Mulberry/Jan/1Psales.csv"},
             "Feb": {"biz": "White Mulberry/Feb/business_report.xlsx", "ads": "White Mulberry/Feb/Sp&Sd.xlsx", "p1": "White Mulberry/Feb/1Psales.csv"},
             "Mar": {"biz": "White Mulberry/Mar/business_report.xlsx", "ads": "White Mulberry/Mar/Sp&Sd.xlsx", "p1": "White Mulberry/Mar/1Psales.csv"},
+            "Apr": {"biz": "White Mulberry/Apr/business_report.xlsx", "ads": "White Mulberry/Apr/Sp&Sd.xlsx", "p1": "White Mulberry/Apr/1Psales.csv"},
         }
     },
 }

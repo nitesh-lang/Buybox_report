@@ -155,7 +155,13 @@ function readAds(filePath) {
   const map = new Map();
   if (!fs.existsSync(filePath)) return map;
   const workbook = XLSX.readFile(filePath, { raw: false });
-  const sheets = workbook.SheetNames.includes("SP_SD_Combined")
+  const combinedRows = workbook.SheetNames.includes("SP_SD_Combined")
+    ? rowsToObjects(XLSX.utils.sheet_to_json(workbook.Sheets["SP_SD_Combined"], { header: 1, defval: "" }))
+    : [];
+  const combinedHeaders = Object.keys(combinedRows[0] || {});
+  const combinedAsinCol = col(combinedHeaders, "advertised asin", "asin");
+  const combinedHasData = combinedRows.some((row) => cleanText(row[combinedAsinCol]).toUpperCase() !== "");
+  const sheets = combinedHasData
     ? ["SP_SD_Combined"]
     : workbook.SheetNames.filter((name) => ["SP", "SD", "SB"].includes(name));
 

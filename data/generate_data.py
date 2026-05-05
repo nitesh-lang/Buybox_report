@@ -180,7 +180,13 @@ for brand_name, cfg in CONFIGS.items():
             try:
                 xl = pd.ExcelFile(ads_path)
                 combined = xl.parse("SP_SD_Combined", dtype=str) if "SP_SD_Combined" in xl.sheet_names else pd.DataFrame()
-                sheets_to_read = ["SP_SD_Combined"] if len(combined) > 0 else [s for s in xl.sheet_names if s in ("SP","SD","SB")]
+                combined.columns = [c.strip() for c in combined.columns]
+                combined_asin_col = col(combined, "advertised asin", "asin") if not combined.empty else None
+                combined_has_data = bool(
+                    combined_asin_col
+                    and combined[combined_asin_col].astype(str).str.strip().str.upper().ne("NAN").any()
+                )
+                sheets_to_read = ["SP_SD_Combined"] if combined_has_data else [s for s in xl.sheet_names if s in ("SP","SD","SB")]
                 for sheet in sheets_to_read:
                     ads_df = xl.parse(sheet, dtype=str)
                     if ads_df.empty: continue

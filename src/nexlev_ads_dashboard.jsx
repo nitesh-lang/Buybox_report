@@ -3,6 +3,12 @@ import RAW_DATA from "./raw_data.json";
 import BSR_RAW from "./bsr_data.json";
 import BSR_SNAPSHOTS from "./bsr_snapshots.json";
 
+const MONTH_SEQUENCE = ["Jan", "Feb", "Mar", "Apr"];
+const MONTH_INDEX = MONTH_SEQUENCE.reduce((acc, month, index) => {
+  acc[month] = index;
+  return acc;
+}, {});
+
 // ── ASIN Master: FBA SKU · Model · Category · DP · NLC ──────────────────────
 const ASIN_MASTER = {
   "B0CYSLCRQS": { fbaSku:"FBA79263", model:"MR-01", category:"Cleaning & Vacuuming",    mainCat:"Home & Kitchen", dp:908.87,  nlc:1072.47 },
@@ -85,6 +91,10 @@ function splitCsvRow(line) {
 
   cells.push(cell);
   return cells.map((value) => value.trim());
+}
+
+function sortMonths(months) {
+  return [...months].sort((a, b) => (MONTH_INDEX[a] ?? 999) - (MONTH_INDEX[b] ?? 999));
 }
 
 function parseCsvNumber(value) {
@@ -2995,6 +3005,7 @@ export default function Dashboard({ onLogout }) {
   const [ctSearch, setCtSearch] = useState("");
   const [smartViewPage, setSmartViewPage] = useState(false);
   const [bsrPage, setBsrPage] = useState(false);
+  const [analyticsPage, setAnalyticsPage] = useState(false);
   const [tablePage, setTablePage] = useState(1);
   const [isSearchPending, startT] = useTransition();
   const timer               = useRef(null);
@@ -3017,6 +3028,16 @@ export default function Dashboard({ onLogout }) {
       setCtTab("Overview");
     }
   }, [compareTabAsin, compareM1, compareM2]);
+
+  useEffect(() => {
+    if (!compareTabAsin) {
+      return;
+    }
+    const nextHash = `#compare/${encodeURIComponent(compareTabAsin)}?m1=${ctM1}&m2=${ctM2}`;
+    if (window.location.hash !== nextHash) {
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${nextHash}`);
+    }
+  }, [compareTabAsin, ctM1, ctM2]);
 
   useEffect(() => {
     const syncDetailFromHash = () => {
@@ -3057,12 +3078,19 @@ export default function Dashboard({ onLogout }) {
         setSmartViewPage(true);
         setSmartViewTab(nextTab);
         setBsrPage(false);
+        setAnalyticsPage(false);
       } else if (hash === "#bsr-tracker") {
         setBsrPage(true);
         setSmartViewPage(false);
+        setAnalyticsPage(false);
+      } else if (hash === "#analytics") {
+        setAnalyticsPage(true);
+        setSmartViewPage(false);
+        setBsrPage(false);
       } else {
         setSmartViewPage(false);
         setBsrPage(false);
+        setAnalyticsPage(false);
       }
     };
 
@@ -3073,7 +3101,7 @@ export default function Dashboard({ onLogout }) {
   }, []);
 
   const brands = useMemo(() => [...new Set(dataRows.map((row) => row.Brand))].sort(), [dataRows]);
-  const months = ["All", "Jan", "Feb", "Mar", "Apr"];
+  const months = ["All", ...MONTH_SEQUENCE];
   const brandScopedRows = useMemo(
     () => dataRows.filter((row) => brand.length === 0 || brand.includes(row.Brand)),
     [dataRows, brand]
@@ -3495,7 +3523,7 @@ export default function Dashboard({ onLogout }) {
   const activeFilterCount = [brand.length > 0 ? "b" : "", month.length > 0 ? "m" : "", cat.length > 0 ? "c" : "", debSearch].filter(Boolean).length;
 
   // Prev month totals for trend indicators
-  const monthOrder = ["Jan","Feb","Mar"];
+  const monthOrder = MONTH_SEQUENCE;
   const prevMonth = month.length === 1 ? monthOrder[monthOrder.indexOf(month[0]) - 1] : null;
   const prevFiltered = useMemo(() => prevMonth ? enriched.filter(r =>
     (brand.length === 0 || brand.includes(r.Brand)) && r.Month === prevMonth && (cat.length === 0 || cat.includes(getCategoryBucket(r, masterData)))
@@ -3531,6 +3559,9 @@ export default function Dashboard({ onLogout }) {
   };
   const openSmartViewPage = (tabKey = SMART_VIEW_TABS[0].key) => {
     openAppTab(`#smart-views/${tabKey}`);
+  };
+  const openAnalyticsPage = () => {
+    openAppTab("#analytics");
   };
   const switchSmartViewTab = (tabKey) => {
     setSmartViewTab(tabKey);
@@ -3613,8 +3644,322 @@ export default function Dashboard({ onLogout }) {
     setShowExportMenu(false);
   };
 
+  const analyticsTotals = useMemo(() => filtered.reduce((acc, row) => {
+    const metrics = getMetrics(row, dataMode);
+    acc.sales += metrics.revenue || 0;
+    acc.units += metrics.units || 0;
+    acc.sessions += metrics.sessions || 0;
+    acc.spend += metrics.adSpend || 0;
+    acc.adSales += metrics.adSales || 0;
+    acc.orders += metrics.amsOrders || 0;
+    acc.impressions += row.Impressions || 0;
+    acc.clicks += row.Clicks || 0;
+    return acc;
+  }, {
+    sales: 0,
+    units: 0,
+    sessions: 0,
+    spend: 0,
+    adSales: 0,
+    orders: 0,
+    impressions: 0,
+    clicks: 0,
+  }), [filtered, dataMode]);
+
+  const analyticsBrandShare = useMemo(() => {
+    const rows = filtered.reduce((acc, row) => {
+      const sales = getMetrics(row, dataMode).revenue || 0;
+      acc[row.Brand] = (acc[row.Brand] || 0) + sales;
+      return acc;
+    }, {});
+
+    return Object.entries(rows)
+      .map(([label, value]) => ({
+        label,
+        value,
+        share: analyticsTotals.sales > 0 ? value / analyticsTotals.sales : 0,
+      }))
+      .sort((a, b) => b.value - a.value);
+  }, [filtered, dataMode, analyticsTotals.sales]);
+
+  const analyticsCategoryShare = useMemo(() => {
+    const rows = filtered.reduce((acc, row) => {
+      const key = getCategoryBucket(row, masterData) || "Unmapped";
+      const sales = getMetrics(row, dataMode).revenue || 0;
+      acc[key] = (acc[key] || 0) + sales;
+      return acc;
+    }, {});
+
+    return Object.entries(rows)
+      .map(([label, value]) => ({
+        label,
+        value,
+        share: analyticsTotals.sales > 0 ? value / analyticsTotals.sales : 0,
+      }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 8);
+  }, [filtered, dataMode, masterData, analyticsTotals.sales]);
+
+  const analyticsMonthSeries = useMemo(() => {
+    const available = MONTH_SEQUENCE.filter((monthLabel) => filtered.some((row) => row.Month === monthLabel));
+    return available.map((monthLabel) => {
+      const monthRows = filtered.filter((row) => row.Month === monthLabel);
+      const total = monthRows.reduce((acc, row) => {
+        const metrics = getMetrics(row, dataMode);
+        acc.sales += metrics.revenue || 0;
+        acc.units += metrics.units || 0;
+        acc.spend += metrics.adSpend || 0;
+        return acc;
+      }, { sales: 0, units: 0, spend: 0 });
+      return { month: monthLabel, ...total };
+    });
+  }, [filtered, dataMode]);
+
+  const analyticsComparison = useMemo(() => {
+    const availableMonths = analyticsMonthSeries.map((item) => item.month);
+    const currentMonth = month.length === 1 && availableMonths.includes(month[0])
+      ? month[0]
+      : availableMonths[availableMonths.length - 1];
+    const currentIndex = MONTH_SEQUENCE.indexOf(currentMonth);
+    const previousMonth = currentIndex > 0
+      ? [...availableMonths].reverse().find((item) => MONTH_SEQUENCE.indexOf(item) < currentIndex)
+      : null;
+
+    if (!currentMonth || !previousMonth) {
+      return { currentMonth: currentMonth || "", previousMonth: previousMonth || "", movers: [] };
+    }
+
+    const asinMap = {};
+    filtered.forEach((row) => {
+      if (row.Month !== currentMonth && row.Month !== previousMonth) {
+        return;
+      }
+      if (!asinMap[row.ASIN]) {
+        asinMap[row.ASIN] = {
+          asin: row.ASIN,
+          title: row.Title,
+          brand: row.Brand,
+          months: {},
+        };
+      }
+      asinMap[row.ASIN].months[row.Month] = getMetrics(row, dataMode).revenue || 0;
+    });
+
+    const movers = Object.values(asinMap)
+      .map((item) => {
+        const prev = item.months[previousMonth] || 0;
+        const curr = item.months[currentMonth] || 0;
+        const delta = curr - prev;
+        const pctChange = prev > 0 ? (delta / prev) * 100 : curr > 0 ? 100 : 0;
+        return { ...item, prev, curr, delta, pctChange };
+      })
+      .filter((item) => item.prev > 0 || item.curr > 0)
+      .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
+      .slice(0, 8);
+
+    return { currentMonth, previousMonth, movers };
+  }, [analyticsMonthSeries, filtered, month, dataMode]);
+
   if (bsrPage) {
     return <BsrTrackerPage onBack={() => { window.location.hash = ""; }} />;
+  }
+
+  if (analyticsPage) {
+    const acos = analyticsTotals.adSales > 0 ? analyticsTotals.spend / analyticsTotals.adSales : 0;
+    const tacos = analyticsTotals.sales > 0 ? analyticsTotals.spend / analyticsTotals.sales : 0;
+    const conversionRate = analyticsTotals.sessions > 0 ? analyticsTotals.units / analyticsTotals.sessions : 0;
+    const clickThroughRate = analyticsTotals.impressions > 0 ? analyticsTotals.clicks / analyticsTotals.impressions : 0;
+    const maxBrandValue = analyticsBrandShare[0]?.value || 1;
+    const maxCategoryValue = analyticsCategoryShare[0]?.value || 1;
+
+    return (
+      <div style={{ fontFamily:"'Inter','Segoe UI',sans-serif", background:THEME.pageBg, minHeight:"100vh", color:THEME.text }}>
+        <div style={{ background:THEME.surface, borderBottom:`1px solid ${THEME.border}`, padding:"14px 24px", display:"flex", justifyContent:"space-between", alignItems:"center", gap:12, flexWrap:"wrap" }}>
+          <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+            <button onClick={closeDetailPage} style={{ background:THEME.surfaceMuted, color:THEME.textSoft, border:`1px solid ${THEME.border}`, borderRadius:8, padding:"7px 12px", fontSize:11, fontWeight:700, cursor:"pointer" }}>
+              ← Back
+            </button>
+            <div>
+              <div style={{ fontSize:18, fontWeight:800, color:THEME.text, letterSpacing:-0.3 }}>Analytics</div>
+              <div style={{ fontSize:10, color:THEME.textFaint, fontFamily:"'DM Mono',monospace", letterSpacing:0.8 }}>
+                Cross-brand view for sales, ads, traffic, and movers
+              </div>
+            </div>
+          </div>
+          <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+            <button onClick={exportFilteredData} style={{ background:THEME.panelBg, color:THEME.textSoft, border:`1px solid ${THEME.border}`, borderRadius:8, padding:"7px 12px", fontSize:11, fontWeight:600, cursor:"pointer" }}>
+              Export CSV ↓
+            </button>
+          </div>
+        </div>
+
+        <div style={{ background: THEME.shellBg, borderBottom: `1px solid ${THEME.border}`, padding: "12px 24px", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <MultiSelectFilter label="Brand" selected={brand} setSelected={(v)=>{setBrand(v);setCompareAsin("");setTablePage(1);}} opts={brands.map(b=>({v:b,l:b}))} isActive={brand.length>0} />
+          <MultiSelectFilter label="Month" selected={month} setSelected={(v)=>{setMonth(v);setTablePage(1);}} opts={MONTH_SEQUENCE.map((monthLabel) => ({ v: monthLabel, l: monthLabel }))} isActive={month.length>0} />
+          <MultiSelectFilter label="Category" selected={cat} setSelected={(v)=>{setCat(v);setCompareAsin("");setTablePage(1);}} opts={cats.map(c=>({v:c,l:c}))} isActive={cat.length>0} />
+          <div style={{ display:"flex", gap:0, borderRadius:8, border:`1px solid ${THEME.border}`, overflow:"hidden", flexShrink:0 }}>
+            {[{v:"biz",l:"Amazon Sales"},{v:"p1",l:"1P Sales"}].map(({v,l}) => (
+              <button key={v} onClick={() => setDataMode(prev => prev === v ? "all" : v)} style={{
+                padding:"7px 13px", border:"none", fontSize:11, fontWeight:700,
+                cursor:"pointer", transition:"all 0.15s", whiteSpace:"nowrap",
+                background: dataMode===v ? "#2563EB" : THEME.surface,
+                color: dataMode===v ? "#fff" : THEME.textSoft,
+                borderRight: v==="biz" ? `1px solid ${THEME.border}` : "none",
+              }}>{l}</button>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ padding:"12px 24px", display:"flex", gap:10, overflowX:"auto", flexWrap:"nowrap", WebkitOverflowScrolling:"touch", background:THEME.surface, borderBottom:`1px solid ${THEME.surfaceSoft}` }}>
+          <KpiCard label={dataMode === "p1" ? "1P Sales" : dataMode === "biz" ? "Amazon Sales" : "Net Sales"} value={inr(analyticsTotals.sales)} accent="#A78BFA" />
+          <KpiCard label="Net Units" value={analyticsTotals.units.toLocaleString("en-IN")} accent="#34D399" />
+          <KpiCard label="Sessions" value={dataMode === "p1" ? "N/A" : analyticsTotals.sessions.toLocaleString("en-IN")} accent="#38BDF8" />
+          <KpiCard label="Ad Spend" value={inr(analyticsTotals.spend)} accent="#FBBF24" />
+          <KpiCard label="Ad Sales" value={inr(analyticsTotals.adSales)} accent="#F9A8D4" />
+          <KpiCard label="ACoS" value={`${(acos * 100).toFixed(1)}%`} accent={acos < 0.2 ? "#34D399" : acos < 0.35 ? "#FBBF24" : "#F87171"} />
+          <KpiCard label="TACoS" value={`${(tacos * 100).toFixed(1)}%`} accent={tacos < 0.1 ? "#34D399" : tacos < 0.2 ? "#FBBF24" : "#F87171"} />
+        </div>
+
+        <div style={{ padding:"18px 24px 32px", display:"grid", gap:16 }}>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(4, minmax(0, 1fr))", gap:12 }}>
+            {[
+              { label:"Impressions", value: analyticsTotals.impressions.toLocaleString("en-IN"), sub:"From SP + SD" },
+              { label:"Clicks", value: analyticsTotals.clicks.toLocaleString("en-IN"), sub:`CTR ${(clickThroughRate * 100).toFixed(2)}%` },
+              { label:"AMS Orders", value: analyticsTotals.orders.toLocaleString("en-IN"), sub:"Attributed orders" },
+              { label:"CVR", value: `${(conversionRate * 100).toFixed(2)}%`, sub:"Units / Sessions" },
+            ].map((item) => (
+              <div key={item.label} style={{ background:THEME.surface, border:`1px solid ${THEME.border}`, borderRadius:14, padding:"16px" }}>
+                <div style={{ fontSize:10, color:THEME.textMuted, fontFamily:"'DM Mono',monospace", letterSpacing:0.8 }}>{item.label}</div>
+                <div style={{ marginTop:8, fontSize:28, fontWeight:800, color:THEME.text }}>{item.value}</div>
+                <div style={{ marginTop:6, fontSize:12, color:THEME.textSoft }}>{item.sub}</div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ display:"grid", gridTemplateColumns:"1.1fr 1.1fr 0.8fr", gap:16, alignItems:"start" }}>
+            <div style={{ background:THEME.surface, border:`1px solid ${THEME.border}`, borderRadius:16, padding:"16px" }}>
+              <div style={{ fontSize:14, fontWeight:800, color:THEME.text, marginBottom:4 }}>Brand Share</div>
+              <div style={{ fontSize:12, color:THEME.textMuted, marginBottom:14 }}>Revenue split across the current selection</div>
+              <div style={{ display:"grid", gap:12 }}>
+                {analyticsBrandShare.map((item) => (
+                  <div key={item.label}>
+                    <div style={{ display:"flex", justifyContent:"space-between", gap:12, marginBottom:6, fontSize:12 }}>
+                      <span style={{ color:THEME.text, fontWeight:600 }}>{item.label}</span>
+                      <span style={{ color:THEME.textSoft }}>{(item.share * 100).toFixed(1)}% · {inr(item.value)}</span>
+                    </div>
+                    <div style={{ height:10, borderRadius:999, background:THEME.surfaceMuted, overflow:"hidden" }}>
+                      <div style={{ width:`${Math.max((item.value / maxBrandValue) * 100, 4)}%`, height:"100%", background:"linear-gradient(90deg, #2563EB 0%, #60A5FA 100%)" }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ background:THEME.surface, border:`1px solid ${THEME.border}`, borderRadius:16, padding:"16px" }}>
+              <div style={{ fontSize:14, fontWeight:800, color:THEME.text, marginBottom:4 }}>Category Share</div>
+              <div style={{ fontSize:12, color:THEME.textMuted, marginBottom:14 }}>Top categories by current sales mix</div>
+              <div style={{ display:"grid", gap:12 }}>
+                {analyticsCategoryShare.map((item) => (
+                  <div key={item.label}>
+                    <div style={{ display:"flex", justifyContent:"space-between", gap:12, marginBottom:6, fontSize:12 }}>
+                      <span style={{ color:THEME.text, fontWeight:600 }}>{item.label}</span>
+                      <span style={{ color:THEME.textSoft }}>{(item.share * 100).toFixed(1)}% · {inr(item.value)}</span>
+                    </div>
+                    <div style={{ height:10, borderRadius:999, background:THEME.surfaceMuted, overflow:"hidden" }}>
+                      <div style={{ width:`${Math.max((item.value / maxCategoryValue) * 100, 4)}%`, height:"100%", background:"linear-gradient(90deg, #14B8A6 0%, #5EEAD4 100%)" }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ background:THEME.surface, border:`1px solid ${THEME.border}`, borderRadius:16, padding:"16px" }}>
+              <div style={{ fontSize:14, fontWeight:800, color:THEME.text, marginBottom:4 }}>Funnel</div>
+              <div style={{ fontSize:12, color:THEME.textMuted, marginBottom:14 }}>Traffic to revenue snapshot</div>
+              <div style={{ display:"grid", gap:10 }}>
+                {[
+                  ["Impressions", analyticsTotals.impressions],
+                  ["Clicks", analyticsTotals.clicks],
+                  ["Sessions", analyticsTotals.sessions],
+                  ["Units", analyticsTotals.units],
+                  ["Ad Sales", analyticsTotals.adSales],
+                  ["Ad Spend", analyticsTotals.spend],
+                ].map(([label, value], index, list) => {
+                  const maxValue = Number(list[0][1]) || 1;
+                  const numericValue = Number(value) || 0;
+                  return (
+                    <div key={label}>
+                      <div style={{ display:"flex", justifyContent:"space-between", gap:12, marginBottom:6, fontSize:12 }}>
+                        <span style={{ color:THEME.text, fontWeight:600 }}>{label}</span>
+                        <span style={{ color:THEME.textSoft }}>{label.includes("Sales") || label.includes("Spend") ? inr(numericValue) : numericValue.toLocaleString("en-IN")}</span>
+                      </div>
+                      <div style={{ height:10, borderRadius:999, background:THEME.surfaceMuted, overflow:"hidden" }}>
+                        <div style={{ width:`${Math.max((numericValue / maxValue) * 100, 4)}%`, height:"100%", background:"linear-gradient(90deg, #4F46E5 0%, #818CF8 100%)" }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, alignItems:"start" }}>
+            <div style={{ background:THEME.surface, border:`1px solid ${THEME.border}`, borderRadius:16, padding:"16px" }}>
+              <div style={{ fontSize:14, fontWeight:800, color:THEME.text, marginBottom:4 }}>Monthly Trend</div>
+              <div style={{ fontSize:12, color:THEME.textMuted, marginBottom:14 }}>Current filtered totals by month</div>
+              <div style={{ display:"grid", gap:12 }}>
+                {analyticsMonthSeries.map((item) => {
+                  const maxSales = analyticsMonthSeries.reduce((max, row) => Math.max(max, row.sales), 0) || 1;
+                  return (
+                    <div key={item.month}>
+                      <div style={{ display:"flex", justifyContent:"space-between", gap:12, marginBottom:6, fontSize:12 }}>
+                        <span style={{ color:THEME.text, fontWeight:700 }}>{item.month} 2026</span>
+                        <span style={{ color:THEME.textSoft }}>{inr(item.sales)} · {item.units.toLocaleString("en-IN")} units</span>
+                      </div>
+                      <div style={{ height:12, borderRadius:999, background:THEME.surfaceMuted, overflow:"hidden" }}>
+                        <div style={{ width:`${Math.max((item.sales / maxSales) * 100, 4)}%`, height:"100%", background:"linear-gradient(90deg, #7C3AED 0%, #C084FC 100%)" }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div style={{ background:THEME.surface, border:`1px solid ${THEME.border}`, borderRadius:16, padding:"16px" }}>
+              <div style={{ fontSize:14, fontWeight:800, color:THEME.text, marginBottom:4 }}>Top Movers</div>
+              <div style={{ fontSize:12, color:THEME.textMuted, marginBottom:14 }}>
+                {analyticsComparison.previousMonth && analyticsComparison.currentMonth
+                  ? `${analyticsComparison.previousMonth} vs ${analyticsComparison.currentMonth}`
+                  : "Select at least two months to compare movers"}
+              </div>
+              <div style={{ display:"grid", gap:10 }}>
+                {analyticsComparison.movers.length === 0 ? (
+                  <div style={{ fontSize:12, color:THEME.textMuted }}>Not enough month data in the current filter to rank movers yet.</div>
+                ) : analyticsComparison.movers.map((item) => (
+                  <div key={item.asin} style={{ border:`1px solid ${THEME.border}`, borderRadius:12, padding:"12px 14px", background:THEME.panelBg }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", gap:12, alignItems:"start" }}>
+                      <div>
+                        <div style={{ fontSize:13, fontWeight:700, color:THEME.text }}>{item.asin}</div>
+                        <div style={{ fontSize:12, color:THEME.textSoft }}>{item.brand} · {String(item.title || "").slice(0, 64)}</div>
+                      </div>
+                      <div style={{ textAlign:"right" }}>
+                        <div style={{ fontSize:13, fontWeight:800, color:item.delta >= 0 ? "#059669" : "#DC2626" }}>
+                          {item.delta >= 0 ? "+" : ""}{inr(item.delta)}
+                        </div>
+                        <div style={{ fontSize:12, color:THEME.textMuted }}>{item.pctChange >= 0 ? "+" : ""}{item.pctChange.toFixed(1)}%</div>
+                      </div>
+                    </div>
+                    <div style={{ marginTop:8, fontSize:12, color:THEME.textSoft }}>
+                      {analyticsComparison.previousMonth}: {inr(item.prev)} → {analyticsComparison.currentMonth}: {inr(item.curr)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   if (smartViewPage) {
@@ -3831,7 +4176,6 @@ export default function Dashboard({ onLogout }) {
   }
 
   if (compareTabMeta) {
-    const ctMonths = ["Jan","Feb","Mar"];
     const activectAsin = ctAsin || compareTabMeta.ASIN;
 
     // All ASINs available
@@ -3841,6 +4185,7 @@ export default function Dashboard({ onLogout }) {
     });
 
     const ctRows = enriched.filter(r => r.ASIN === activectAsin);
+    const ctMonths = sortMonths([...new Set(ctRows.map((row) => row.Month))].filter(Boolean));
     const ctR1 = ctRows.find(r => r.Month === ctM1);
     const ctR2 = ctRows.find(r => r.Month === ctM2);
     const ctMeta = ctRows[0] || compareTabMeta;
@@ -3988,9 +4333,9 @@ export default function Dashboard({ onLogout }) {
           </div>
           {/* Monthly split summary below */}
           <div style={{background:THEME.surface,border:`1px solid ${THEME.border}`,borderRadius:14,overflow:"hidden"}}>
-            <div style={{display:"grid",gridTemplateColumns:`2fr repeat(${["Jan","Feb","Mar"].length},1fr)`,background:THEME.surfaceMuted,padding:"10px 16px",borderBottom:`1px solid ${THEME.border}`}}>
+            <div style={{display:"grid",gridTemplateColumns:`2fr repeat(${ctMonths.length},1fr)`,background:THEME.surfaceMuted,padding:"10px 16px",borderBottom:`1px solid ${THEME.border}`}}>
               <div style={{fontSize:10,color:THEME.textMuted,fontFamily:"'DM Mono',monospace",letterSpacing:0.8,fontWeight:700}}>METRIC</div>
-              {["Jan","Feb","Mar"].map(m=><div key={m} style={{fontSize:10,color: m===ctM1||m===ctM2?"#2563EB":THEME.textMuted,fontFamily:"'DM Mono',monospace",letterSpacing:0.8,textAlign:"right",fontWeight: m===ctM1||m===ctM2?700:400}}>{m} 2026{m===ctM1?" ←":m===ctM2?" →":""}</div>)}
+              {ctMonths.map(m=><div key={m} style={{fontSize:10,color: m===ctM1||m===ctM2?"#2563EB":THEME.textMuted,fontFamily:"'DM Mono',monospace",letterSpacing:0.8,textAlign:"right",fontWeight: m===ctM1||m===ctM2?700:400}}>{m} 2026{m===ctM1?" ←":m===ctM2?" →":""}</div>)}
             </div>
             {[
               {label:"Net Sales",key:"TotalNetSalesValue",fmt:"cur"},
@@ -3999,7 +4344,7 @@ export default function Dashboard({ onLogout }) {
               {label:"Ad Spend",key:"TotalAdsSpend",fmt:"cur"},
               {label:"ACOS",key:"ACOS",fmt:"pct"},
             ].map((metric,i)=>{
-              const allMonths = [...new Set(enriched.filter(r=>r.ASIN===activectAsin).map(r=>r.Month))].sort((a,b)=>["Jan","Feb","Mar"].indexOf(a)-["Jan","Feb","Mar"].indexOf(b));
+              const allMonths = sortMonths([...new Set(enriched.filter(r=>r.ASIN===activectAsin).map(r=>r.Month))]);
               const rows2 = enriched.filter(r=>r.ASIN===activectAsin);
               const vals = allMonths.map(m=>rows2.find(r=>r.Month===m)?.[metric.key]??null);
               const fmtV = (v) => v===null?"—":metric.fmt==="cur"?inr(v):metric.fmt==="pct"?`${(v*100).toFixed(1)}%`:v.toLocaleString("en-IN");
@@ -4057,7 +4402,7 @@ export default function Dashboard({ onLogout }) {
         </div>
       );
       if (ctTab === "Monthly Split") {
-        const allMonthRows = ctRows.sort((a,b) => ["Jan","Feb","Mar"].indexOf(a.Month) - ["Jan","Feb","Mar"].indexOf(b.Month));
+        const allMonthRows = [...ctRows].sort((a,b) => (MONTH_INDEX[a.Month] ?? 999) - (MONTH_INDEX[b.Month] ?? 999));
         return (
           <div style={{display:"grid",gap:12}}>
             {allMonthRows.map(row => (
@@ -4088,7 +4433,7 @@ export default function Dashboard({ onLogout }) {
         );
       }
       if (ctTab === "Top 10") {
-        const monthSequence = ["Jan", "Feb", "Mar"];
+        const monthSequence = ctMonths;
         const top10BrandOptions = ["", ...new Set(enriched.map((row) => row.Brand).filter(Boolean))];
         const top10SourceRows = enriched.filter((row) => !ctTop10Brand || row.Brand === ctTop10Brand);
         const top10Data = (() => {
@@ -4123,7 +4468,7 @@ export default function Dashboard({ onLogout }) {
         return (
           <div style={{display:"grid",gap:12}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <div style={{fontSize:13,color:"#64748B"}}>Top 10 by Net Sales — {showAllMonths ? "Jan, Feb, Mar" : `${ctM1} vs ${ctM2}`}</div>
+              <div style={{fontSize:13,color:"#64748B"}}>Top 10 by Net Sales — {showAllMonths ? monthSequence.join(", ") : `${ctM1} vs ${ctM2}`}</div>
               <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
                 <div style={{ display:"flex", gap:6, alignItems:"center", padding:"6px 10px", borderRadius:999, background:THEME.surface, border:`1px solid ${THEME.border}` }}>
                   <span style={{ fontSize:10, color:THEME.textFaint, fontFamily:"'DM Mono',monospace", letterSpacing:0.8, textTransform:"uppercase", fontWeight:600 }}>Brand</span>
@@ -4147,7 +4492,7 @@ export default function Dashboard({ onLogout }) {
                     style={{ background:"transparent", border:"none", color:THEME.text, fontSize:12, outline:"none", cursor:"pointer", fontWeight:600 }}
                   >
                     <option value="selected">Selected Months</option>
-                    <option value="all">All 3 Months</option>
+                    <option value="all">All Months</option>
                   </select>
                 </div>
                 {["ASIN","Model"].map(v=>(
@@ -4219,7 +4564,7 @@ export default function Dashboard({ onLogout }) {
           a.title.toLowerCase().includes(ctSearch.toLowerCase()) ||
           a.brand.toLowerCase().includes(ctSearch.toLowerCase())
         ).slice(0, 50);
-        const allMonthsList = ["Jan","Feb","Mar"];
+        const allMonthsList = ctMonths;
         const selectedRows = enriched.filter(r => r.ASIN === activectAsin);
         const metrics = [
           { label:"Net Sales", key:"TotalNetSalesValue", fmt:"cur" },
@@ -5084,6 +5429,22 @@ export default function Dashboard({ onLogout }) {
             }}
           >
             📊 BSR Tracker
+          </button>
+          <button
+            onClick={openAnalyticsPage}
+            style={{
+              border:"none",
+              borderBottom: analyticsPage ? "2px solid #14B8A6" : "2px solid transparent",
+              background:THEME.surface,
+              color: analyticsPage ? "#0F766E" : THEME.textMuted,
+              fontSize:11,
+              fontWeight:700,
+              cursor:"pointer",
+              padding:"7px 14px",
+              borderRadius:0,
+            }}
+          >
+            📈 Analytics
           </button>
           <button
             onClick={() => openComparePage(activeCompareAsin)}

@@ -1,8 +1,9 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import Dashboard from "./nexlev_ads_dashboard";
 
 const LOGIN_USERNAME = "info@cambiumretail.com";
 const LOGIN_PASSWORD = "Cambium@109";
+const AUTH_STORAGE_KEY = "buybox-authenticated";
 
 const HELP_ITEMS = [
   {
@@ -34,7 +35,7 @@ function LoginScreen({ onLogin }) {
     }
 
     if (username.trim() !== LOGIN_USERNAME || password !== LOGIN_PASSWORD) {
-      setError("Use username info@cambiumretail.com and password Cambium@109.");
+      setError("Invalid username or password. Contact your admin if you need access.");
       return;
     }
 
@@ -255,11 +256,37 @@ function LoginScreen({ onLogin }) {
 }
 
 export default function App() {
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [isLoggedIn, setIsLoggedIn] = useState(() => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+    return window.localStorage.getItem(AUTH_STORAGE_KEY) === "true";
+  });
+
+  useEffect(() => {
+    const syncAuthState = (event) => {
+      if (event.key === AUTH_STORAGE_KEY) {
+        setIsLoggedIn(event.newValue === "true");
+      }
+    };
+
+    window.addEventListener("storage", syncAuthState);
+    return () => window.removeEventListener("storage", syncAuthState);
+  }, []);
+
+  const handleLogin = () => {
+    window.localStorage.setItem(AUTH_STORAGE_KEY, "true");
+    setIsLoggedIn(true);
+  };
+
+  const handleLogout = () => {
+    window.localStorage.removeItem(AUTH_STORAGE_KEY);
+    setIsLoggedIn(false);
+  };
 
   if (!isLoggedIn) {
-    return <LoginScreen onLogin={() => setIsLoggedIn(true)} />;
+    return <LoginScreen onLogin={handleLogin} />;
   }
 
-  return <Dashboard onLogout={() => setIsLoggedIn(false)} />;
+  return <Dashboard onLogout={handleLogout} />;
 }

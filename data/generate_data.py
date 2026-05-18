@@ -154,7 +154,10 @@ for brand_name, cfg in CONFIGS.items():
                     rev   = safe_float(row.get(rev_col,0)) if rev_col else 0
                     units = safe_float(row.get(units_col,0)) if units_col else 0
                     sess  = safe_float(row.get(sess_col,0)) if sess_col else 0
-                    bb    = safe_float(bb_raw)/100
+                    bb_val = safe_float(bb_raw)
+                    # CSV files have "60.67%" → bb_raw="60.67" → value > 1 → divide by 100
+                    # XLSX files have 0.6067 (already decimal) → value ≤ 1 → use as-is
+                    bb    = bb_val / 100 if bb_val > 1 else bb_val
                     title = str(row.get(title_col,"")).strip() if title_col else ""
                     if asin in biz_lookup:
                         # ASIN appears multiple times (parent+child rows) — sum numeric fields, keep largest bb/title

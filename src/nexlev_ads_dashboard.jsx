@@ -232,7 +232,7 @@ const COLS = [
   { key:"Impressions",     label:"Impressions",    fmt:"num",  w:92  },
   { key:"Clicks",          label:"Clicks",         fmt:"num",  w:62  },
   { key:"AmsOrders",       label:"AMS Orders",     fmt:"num",  w:85  },
-  { key:"OrganiSales",     label:"Organic Sales",  fmt:"num",  w:95  },
+  { key:"OrganiSales",     label:"Organic Sales",  fmt:"inr",  w:95  },
   { key:"TotalAdsSpend",   label:"Ad Spend",      fmt:"inr",  w:90  },
   { key:"TotalAdsSales",   label:"Ad Sales",      fmt:"inr",  w:90  },
   { key:"ACOS",            label:"ACOS",           fmt:"pct",  w:72  },
@@ -330,7 +330,7 @@ function fmtCell(row, col) {
     return null;
   }
   switch (col.fmt) {
-    case "num":   return v.toLocaleString("en-IN");
+    case "num":   return Math.round(v).toLocaleString("en-IN");
     case "inr":   return "₹" + v.toLocaleString("en-IN", { maximumFractionDigits: 0 });
     case "inr2":  return "₹" + v.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     case "pct":   return (v * 100).toFixed(1) + "%";
@@ -445,7 +445,7 @@ function Panel({ title, subtitle, right, children }) {
 function formatMetricValue(value, type) {
   if (!value) return type === "currency" ? "₹0" : "0";
   if (type === "currency") return inr(value);
-  return value.toLocaleString("en-IN");
+  return Math.round(value).toLocaleString("en-IN");
 }
 
 function MiniMonthBars({ jan = 0, feb = 0, colorA = "#38BDF8", colorB = "#A78BFA", type = "number" }) {
@@ -3289,7 +3289,7 @@ export default function Dashboard({ onLogout }) {
     { label: "AMS Orders", jan: comparison.m1?.AmsOrders ?? 0, feb: comparison.m2?.AmsOrders ?? 0, type: "number", colorA: "#8B5CF6", colorB: "#7C3AED" },
     { label: "ACOS", jan: (comparison.m1?.ACOS ?? 0) * 100, feb: (comparison.m2?.ACOS ?? 0) * 100, type: "number", colorA: "#F59E0B", colorB: "#F97316" },
     { label: "TACOS", jan: (comparison.m1?.TACOS ?? 0) * 100, feb: (comparison.m2?.TACOS ?? 0) * 100, type: "number", colorA: "#10B981", colorB: "#059669" },
-    { label: "Organic Units", jan: comparison.m1?.OrganiSales ?? 0, feb: comparison.m2?.OrganiSales ?? 0, type: "number", colorA: "#38BDF8", colorB: "#60A5FA" },
+    { label: "Organic Sales", jan: comparison.m1?.OrganiSales ?? 0, feb: comparison.m2?.OrganiSales ?? 0, type: "currency", colorA: "#38BDF8", colorB: "#60A5FA" },
     { label: "Impressions", jan: comparison.m1?.Impressions ?? 0, feb: comparison.m2?.Impressions ?? 0, type: "number", colorA: "#A78BFA", colorB: "#8B5CF6" },
   ]), [comparison]);
 
@@ -3367,7 +3367,7 @@ export default function Dashboard({ onLogout }) {
     { key: "impressions", label: "Impressions", jan: compareTabM1?.Impressions ?? 0, feb: compareTabM2?.Impressions ?? 0, type: "number", colorA: "#38BDF8", colorB: "#60A5FA" },
     { key: "acos", label: "ACOS", jan: (compareTabM1?.ACOS ?? 0) * 100, feb: (compareTabM2?.ACOS ?? 0) * 100, type: "number", colorA: "#F59E0B", colorB: "#F97316" },
     { key: "tacos", label: "TACOS", jan: (compareTabM1?.TACOS ?? 0) * 100, feb: (compareTabM2?.TACOS ?? 0) * 100, type: "number", colorA: "#10B981", colorB: "#059669" },
-    { key: "organic", label: "Organic Units", jan: compareTabM1?.OrganiSales ?? 0, feb: compareTabM2?.OrganiSales ?? 0, type: "number", colorA: "#34D399", colorB: "#2DD4BF" },
+    { key: "organic", label: "Organic Sales", jan: compareTabM1?.OrganiSales ?? 0, feb: compareTabM2?.OrganiSales ?? 0, type: "currency", colorA: "#34D399", colorB: "#2DD4BF" },
     { key: "cac", label: "CAC ₹", jan: compareTabM1?.CAC ?? 0, feb: compareTabM2?.CAC ?? 0, type: "currency", colorA: "#A78BFA", colorB: "#8B5CF6" },
     { key: "cvr", label: "Conversion %", jan: (compareTabM1?.ConversionPct ?? 0) * 100, feb: (compareTabM2?.ConversionPct ?? 0) * 100, type: "number", colorA: "#34D399", colorB: "#10B981" },
     { key: "organicpct", label: "Organic %", jan: (compareTabM1?.OrganicPct ?? 0) * 100, feb: (compareTabM2?.OrganicPct ?? 0) * 100, type: "number", colorA: "#0EA5E9", colorB: "#2563EB" },
@@ -4200,7 +4200,7 @@ export default function Dashboard({ onLogout }) {
         { key: "buybox", label: "buybox", prev: ctR1?.BuyboxPct ?? 0, curr: ctR2?.BuyboxPct ?? 0, better: "up", format: "pct" },
         { key: "adsSales", label: "ads sales", prev: ctR1?.TotalAdsSales ?? 0, curr: ctR2?.TotalAdsSales ?? 0, better: "up" },
         { key: "adsSpend", label: "ads spend", prev: ctR1?.TotalAdsSpend ?? 0, curr: ctR2?.TotalAdsSpend ?? 0, better: "down" },
-        { key: "organicUnits", label: "organic units", prev: ctR1?.OrganiSales ?? 0, curr: ctR2?.OrganiSales ?? 0, better: "up" },
+        { key: "organicSales", label: "organic sales", prev: ctR1?.OrganiSales ?? 0, curr: ctR2?.OrganiSales ?? 0, better: "up" },
         { key: "acos", label: "ACOS", prev: ctR1?.ACOS ?? 0, curr: ctR2?.ACOS ?? 0, better: "down", format: "pct" },
         { key: "tacos", label: "TACOS", prev: ctR1?.TACOS ?? 0, curr: ctR2?.TACOS ?? 0, better: "down", format: "pct" },
       ].map((metric) => {
@@ -4219,7 +4219,7 @@ export default function Dashboard({ onLogout }) {
 
       const formatMetricValue = (metric, value) => {
         if (metric.format === "pct") return `${(value * 100).toFixed(1)}%`;
-        if (metric.key === "sales" || metric.key === "adsSales" || metric.key === "adsSpend") return inr(value);
+        if (metric.key === "sales" || metric.key === "adsSales" || metric.key === "adsSpend" || metric.key === "organicSales") return inr(value);
         return value.toLocaleString("en-IN");
       };
 
@@ -4232,7 +4232,7 @@ export default function Dashboard({ onLogout }) {
       }
 
       const overallSales = metrics.find((metric) => metric.key === "sales");
-      const overallOrganic = metrics.find((metric) => metric.key === "organicUnits");
+      const overallOrganic = metrics.find((metric) => metric.key === "organicSales");
       const overallBuybox = metrics.find((metric) => metric.key === "buybox");
 
       const summaryParts = [];
@@ -4240,7 +4240,7 @@ export default function Dashboard({ onLogout }) {
         summaryParts.push(`Net sales ${overallSales.delta >= 0 ? "rose" : "fell"} ${Math.abs(overallSales.pctChange).toFixed(1)}% from ${ctM1} to ${ctM2}.`);
       }
       if (overallOrganic && overallOrganic.magnitude > 0) {
-        summaryParts.push(`Organic units ${overallOrganic.delta >= 0 ? "moved up" : "dropped"} ${Math.abs(overallOrganic.pctChange).toFixed(1)}%.`);
+        summaryParts.push(`Organic sales ${overallOrganic.delta >= 0 ? "moved up" : "dropped"} ${Math.abs(overallOrganic.pctChange).toFixed(1)}%.`);
       }
       if (overallBuybox && overallBuybox.magnitude > 0) {
         summaryParts.push(`Buybox ${overallBuybox.delta >= 0 ? "improved" : "slipped"} to ${(overallBuybox.curr * 100).toFixed(1)}%.`);
@@ -4255,7 +4255,7 @@ export default function Dashboard({ onLogout }) {
         : "No major deterioration stood out in this comparison.";
 
       let actionText = "Keep monitoring this ASIN before making a pricing or ads change.";
-      if ((metrics.find((metric) => metric.key === "organicUnits")?.delta ?? 0) < 0 && (metrics.find((metric) => metric.key === "adsSales")?.delta ?? 0) > 0) {
+      if ((metrics.find((metric) => metric.key === "organicSales")?.delta ?? 0) < 0 && (metrics.find((metric) => metric.key === "adsSales")?.delta ?? 0) > 0) {
         actionText = "Organic contribution is weakening while paid sales are rising, so review listing quality and buybox protection before increasing ad budgets further.";
       } else if ((metrics.find((metric) => metric.key === "buybox")?.delta ?? 0) < 0) {
         actionText = "Buybox slipped in the selected comparison, so check pricing, stock health, and seller competition first.";
@@ -4329,7 +4329,7 @@ export default function Dashboard({ onLogout }) {
             <MetricCard label="CAC" v1={ctR1?.CAC} v2={ctR2?.CAC} fmt="cur"/>
             <MetricCard label="CVR %" v1={ctR1?.ConversionPct} v2={ctR2?.ConversionPct} fmt="pct"/>
             <MetricCard label="Organic %" v1={ctR1?.OrganicPct} v2={ctR2?.OrganicPct} fmt="pct"/>
-            <MetricCard label="Organic Units" v1={ctR1?.OrganiSales} v2={ctR2?.OrganiSales}/>
+            <MetricCard label="Organic Sales" v1={ctR1?.OrganiSales} v2={ctR2?.OrganiSales}/>
           </div>
           {/* Monthly split summary below */}
           <div style={{background:THEME.surface,border:`1px solid ${THEME.border}`,borderRadius:14,overflow:"hidden"}}>
@@ -4366,7 +4366,7 @@ export default function Dashboard({ onLogout }) {
           <MetricCard label="Net Units" v1={ctR1?.NetUnits} v2={ctR2?.NetUnits}/>
           <MetricCard label="AMS Orders" v1={ctR1?.AmsOrders} v2={ctR2?.AmsOrders}/>
           <MetricCard label="Ad Sales" v1={ctR1?.TotalAdsSales} v2={ctR2?.TotalAdsSales} fmt="cur"/>
-          <MetricCard label="Organic Units" v1={ctR1?.OrganiSales} v2={ctR2?.OrganiSales}/>
+          <MetricCard label="Organic Sales" v1={ctR1?.OrganiSales} v2={ctR2?.OrganiSales}/>
           <MetricCard label="Organic %" v1={ctR1?.OrganicPct} v2={ctR2?.OrganicPct} fmt="pct"/>
         </div>
       );
@@ -4581,7 +4581,7 @@ export default function Dashboard({ onLogout }) {
           { label:"CAC", key:"CAC", fmt:"cur" },
           { label:"CVR %", key:"ConversionPct", fmt:"pct" },
           { label:"Organic %", key:"OrganicPct", fmt:"pct" },
-          { label:"Organic Units", key:"OrganiSales", fmt:"num" },
+          { label:"Organic Sales", key:"OrganiSales", fmt:"cur" },
         ];
         const fmtVal = (val, fmt) => fmt==="cur" ? inr(val||0) : fmt==="pct" ? `${((val||0)*100).toFixed(1)}%` : (val||0).toLocaleString("en-IN");
         return (

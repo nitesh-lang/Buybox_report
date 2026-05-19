@@ -253,9 +253,10 @@ for brand_name, cfg in CONFIGS.items():
             # includes ad-attributed sales — ad_sales is a SUBSET of rev_3p, not added to it).
             # For 1P: Rev1P is separate revenue stream; combined mode shows both together.
             net_sales = rev_3p + rev_1p
-            impr      = ads.get("impr", 0)
-            clicks    = ads.get("clicks", 0)
-            ams_orders= ads.get("orders", 0)
+            _ri = lambda v: round(v) if v == v else 0  # NaN != NaN
+            impr      = _ri(ads.get("impr", 0))
+            clicks    = _ri(ads.get("clicks", 0))
+            ams_orders= _ri(ads.get("orders", 0))
             units_3p  = biz.get("units_3p", 0)
             units_1p  = p1.get("units_1p", 0)
             sessions  = biz.get("sessions", 0)

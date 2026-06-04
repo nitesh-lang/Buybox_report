@@ -636,27 +636,38 @@ def write_output(state: dict, start: dt.date) -> None:
         return
 
     mlabel = month_label(start)
-    brands = sorted({b for (b, _) in by_brand_rtype.keys()})
     print(f"📁 writing brand × rtype CSVs under data/<brand>/{mlabel}/")
-    for brand in brands:
-        brand_dir = DATA_DIR / brand / mlabel
-        brand_dir.mkdir(parents=True, exist_ok=True)
 
-        # SP, SD, SB-ads → straight CSVs (friendly column names)
-        for rtype in ("sp_adprod", "sd_adprod", "sb_ad"):
-            rows = by_brand_rtype.get((brand, rtype), [])
-            if not rows:
+    # ── Per-rtype: pool rows across ALL profiles, enrich with master
+    #    (brand is set canonically per-row via ASIN), THEN split by the
+    #    post-enrichment brand.  This is the SP/SD equivalent of the SB
+    #    global-attribute pattern below.  Catches Tonor ASINs running
+    #    inside the AudioArray profile and routes them to data/Tonor/.
+    for rtype in ("sp_adprod", "sd_adprod", "sb_ad"):
+        pooled: list[dict] = []
+        for (_b, r_t), rows in by_brand_rtype.items():
+            if r_t == rtype:
+                pooled.extend(rows)
+        if not pooled:
+            continue
+        df = _normalise_rows(rtype, pooled)
+        if df.empty or "brand" not in df.columns:
+            continue
+        # Master-derived brand may be blank for off-master ASINs; bucket
+        # those into "(unmapped)" so they stay visible without polluting
+        # a real brand folder.
+        df["brand"] = df["brand"].astype(str).str.strip().replace(
+            {"": "(unmapped)", "nan": "(unmapped)", "None": "(unmapped)"}
+        )
+        for brand_out in sorted(df["brand"].dropna().unique()):
+            sub = df[df["brand"] == brand_out]
+            if sub.empty:
                 continue
-            df = _normalise_rows(rtype, rows)
-            out = brand_dir / REPORT_TYPES[rtype]["out_name"]
-            df.to_csv(out, index=False)
-            print(f"  · {brand:<20} {out.relative_to(ROOT)}  ({len(df):,} rows)")
-
-        # Per-brand SB-ad rows just for the raw ads_sb.csv (above) —
-        # attribution runs globally below, then splits by the brand the
-        # L0-L4 cascade returns.  Mirrors the weekly's master-by-ASIN
-        # re-tag: Tonor ASINs running inside the AudioArray ad account
-        # get re-attributed to brand=Tonor.
+            bdir = DATA_DIR / brand_out / mlabel
+            bdir.mkdir(parents=True, exist_ok=True)
+            out = bdir / REPORT_TYPES[rtype]["out_name"]
+            sub.to_csv(out, index=False)
+            print(f"  · {brand_out:<20} {out.relative_to(ROOT)}  ({len(sub):,} rows)")
 
     # ── Global SB attribution (cross-profile) ──
     all_sb_ad: list[dict] = []

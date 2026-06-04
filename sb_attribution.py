@@ -350,14 +350,18 @@ def attribute_sb_l0_l4(
             continue
         n = len(asins)
         for asin in asins:
-            # Pull canonical SKU + Model + categories from master via ASIN.
-            # Master is the source of truth — operator rule from weekly:
-            # raw ASIN → master gives SKU + Model + Brand + Categories.
+            # Pull canonical SKU + Model + Brand + categories from master
+            # via ASIN.  Master is the source of truth — overrides the
+            # cascade's `brand` (which came from the L0 map, profile-
+            # derived).  This is what re-tags Tonor ASINs running inside
+            # the AudioArray ad account from brand=Audio Array (map) to
+            # brand=Tonor (master).  Mirrors weekly step4's behaviour.
             meta = asin_to_meta.get(asin, {})
+            row_brand = meta.get("brand") or brand
             out.append({
                 "campaignId":       r["campaignId"],
                 "campaignName":     r["campaignName"],
-                "brand":            brand,
+                "brand":            row_brand,
                 "asin":             asin,
                 "sku":              meta.get("sku", ""),
                 "model":            meta.get("model", ""),

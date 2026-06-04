@@ -13,11 +13,32 @@ const CONFIGS = {
   "White Mulberry": ["Jan", "Feb", "Mar", "Apr", "May"],
 };
 
+// Legacy operator-exported folder layout (Sp&Sd.xlsx + business_report.xlsx etc.)
 const BRAND_FOLDERS = {
   Nexlev: "Nexlev",
   "Audio Array": "Audio array",
   Tonor: "Tonor",
   "White Mulberry": "White Mulberry",
+};
+
+// New API-produced folder layout: data/<Brand>/<YYYY-MM>/ads_*.csv
+// Lives alongside the legacy folders.  Writer is monthly_buybox_pull.py
+// (the GitHub Actions monthly cron).
+const API_BRAND_FOLDERS = {
+  Nexlev: "Nexlev",
+  "Audio Array": "Audio Array",
+  Tonor: "Tonor",
+  "White Mulberry": "White Mulberry",
+};
+
+// Month name → YYYY-MM stamp.  Year hardcoded to 2026 to match what
+// the monthly cron emits.  Bump when 2027 rolls around (or wire in a
+// year-detection if you want it self-maintaining).
+const MONTH_YYYY_MM = {
+  Jan: "2026-01", Feb: "2026-02", Mar: "2026-03",
+  Apr: "2026-04", May: "2026-05", Jun: "2026-06",
+  Jul: "2026-07", Aug: "2026-08", Sep: "2026-09",
+  Oct: "2026-10", Nov: "2026-11", Dec: "2026-12",
 };
 
 function cleanText(value) {
@@ -151,6 +172,52 @@ function readBusiness(filePath) {
   return map;
 }
 
+// Read API-produced per-ASIN ads CSVs from data/<Brand>/<YYYY-MM>/.
+// Pools SP + SD + SB-attributed into a single map per ASIN — same
+// shape readAds() returns from the operator-exported Sp&Sd.xlsx.
+// Returns null when none of the 3 CSVs exist (caller then falls back
+// to the legacy xlsx path).
+function readAdsApi(brand, month) {
+  const stamp = MONTH_YYYY_MM[month];
+  const folder = API_BRAND_FOLDERS[brand];
+  if (!stamp || !folder) return null;
+  const dir = path.join(DATA, folder, stamp);
+  const candidates = ["ads_sp.csv", "ads_sd.csv", "ads_sb_attributed.csv"]
+    .map((name) => path.join(dir, name))
+    .filter((p) => fs.existsSync(p));
+  if (candidates.length === 0) return null;
+
+  const map = new Map();
+  candidates.forEach((csvPath) => {
+    const rows = readCsv(csvPath, 0);
+    if (!rows.length) return;
+    const headers = Object.keys(rows[0]);
+    const asinCol  = col(headers, "asin");
+    if (!asinCol) return;
+    // SP / SD use friendly capitalised names; SB-attributed uses
+    // lowercase.  col() does a case-insensitive substring match so
+    // these picks cover both schemas with one set of lookups.
+    const spendCol  = col(headers, "spend");
+    const salesCol  = col(headers, "14 day total sales", "attributed_sales", "sales");
+    const imprCol   = col(headers, "impressions");
+    const clickCol  = col(headers, "clicks");
+    const ordersCol = col(headers, "14 day total units", "ams_orders", "orders");
+    rows.forEach((row) => {
+      const asin = cleanText(row[asinCol]).toUpperCase();
+      if (!asin) return;
+      const current = map.get(asin) || { spend: 0, sales: 0, impressions: 0, clicks: 0, orders: 0 };
+      current.spend       += safeFloat(row[spendCol]);
+      current.sales       += safeFloat(row[salesCol]);
+      current.impressions += safeFloat(row[imprCol]);
+      current.clicks      += safeFloat(row[clickCol]);
+      current.orders      += safeFloat(row[ordersCol]);
+      map.set(asin, current);
+    });
+  });
+  return map;
+}
+
+
 function readAds(filePath) {
   const map = new Map();
   if (!fs.existsSync(filePath)) return map;
@@ -223,7 +290,13 @@ function build() {
       ]);
 
       const business = readBusiness(bizPath);
-      const ads = readAds(adsPath);
+      // Prefer the new API-produced CSVs in data/<Brand>/<YYYY-MM>/
+      // (written by monthly_buybox_pull.py on every cron / dispatch).
+      // Falls back to operator-exported Sp&Sd.xlsx for historical
+      // months that pre-date the API automation.
+      const apiAds = readAdsApi(brand, month);
+      const ads = apiAds && apiAds.size > 0 ? apiAds : readAds(adsPath);
+      const adsSource = apiAds && apiAds.size > 0 ? "api" : "xlsx";
       const p1 = readP1(p1Path);
       const asins = new Set([...business.keys(), ...ads.keys(), ...p1.keys()]);
       let count = 0;
@@ -277,7 +350,7 @@ function build() {
         count += 1;
       });
 
-      console.log(`${brand} ${month}: ${count} ASINs`);
+      console.log(`${brand} ${month}: ${count} ASINs  (ads source: ${adsSource})`);
     });
   });
 

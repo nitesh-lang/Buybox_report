@@ -4,8 +4,9 @@
   "main": "index.js",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "node Scripts/generate_raw_data.js && vite build",
     "preview": "vite preview",
+    "build-raw": "node Scripts/generate_raw_data.js",
     "build-bsr": "python scripts/build_bsr_snapshots.py",
     "build-bsr:py": "py scripts/build_bsr_snapshots.py"
   },

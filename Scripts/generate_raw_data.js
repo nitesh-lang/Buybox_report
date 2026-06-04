@@ -7,10 +7,10 @@ const DATA = path.join(ROOT, "data");
 const OUT = path.join(ROOT, "src", "raw_data.json");
 
 const CONFIGS = {
-  Nexlev: ["Jan", "Feb", "Mar", "Apr"],
-  "Audio Array": ["Jan", "Feb", "Mar", "Apr"],
-  Tonor: ["Jan", "Feb", "Mar", "Apr"],
-  "White Mulberry": ["Jan", "Feb", "Mar", "Apr"],
+  Nexlev: ["Jan", "Feb", "Mar", "Apr", "May"],
+  "Audio Array": ["Jan", "Feb", "Mar", "Apr", "May"],
+  Tonor: ["Jan", "Feb", "Mar", "Apr", "May"],
+  "White Mulberry": ["Jan", "Feb", "Mar", "Apr", "May"],
 };
 
 const BRAND_FOLDERS = {
@@ -286,3 +286,4 @@ function build() {
 }
 
 build();
+

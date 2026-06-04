@@ -564,16 +564,40 @@ def attribute_sb(sb_ad_rows: list[dict], _sb_purch_rows: list[dict],
 # Friendly column names — same shape as the weekly project's operator-
 # exported xlsx so downstream code is portable.
 def _normalise_rows(rtype_key: str, rows: list[dict]) -> pd.DataFrame:
-    """Rename API column names → friendly canonical names."""
+    """Rename API columns to friendly names AND enrich every row's
+    SKU / Model / Brand / Category via master-by-ASIN lookup.
+    Mirrors the weekly's step4 'ASIN is truth' rule: raw API values
+    for SKU/Model are NOT trusted — master is the source of truth.
+    """
     if not rows:
         return pd.DataFrame()
     df = pd.DataFrame(rows)
     cfg = REPORT_TYPES[rtype_key]
-    rename: dict[str, str] = {}
+
+    # 1) Pre-rename ASIN column to lowercase `asin` so the master
+    #    enrichment helper has a stable column name to read from.
     if "asin_col" in cfg and cfg["asin_col"] in df.columns:
-        rename[cfg["asin_col"]] = "Advertised ASIN"
+        df = df.rename(columns={cfg["asin_col"]: "asin"})
+    # Stash the raw advertised SKU (API value) as `raw_sku` so the
+    # canonical `sku` from master can overwrite without losing the
+    # original — useful when auditing FBA vs FBP vs FBM SKU drift.
     if "sku_col" in cfg and cfg["sku_col"] in df.columns:
-        rename[cfg["sku_col"]]  = "Advertised SKU"
+        df = df.rename(columns={cfg["sku_col"]: "raw_sku"})
+
+    # 2) ASIN → master enrichment.  Writes canonical sku / model /
+    #    brand / category_l0/l1/l2.  Rows whose ASIN isn't in master
+    #    are left untouched (raw_sku still available as fallback).
+    from sb_attribution import enrich_with_master
+    if "asin" in df.columns:
+        for col in ("sku", "model", "brand",
+                    "category_l0", "category_l1", "category_l2"):
+            if col not in df.columns:
+                df[col] = ""
+        df = enrich_with_master(df, asin_col="asin")
+
+    # 3) Friendly metric names — match operator's xlsx convention so
+    #    downstream React dashboard / Excel pivots feel familiar.
+    rename: dict[str, str] = {}
     if cfg.get("spend_col") in df.columns:
         rename[cfg["spend_col"]]  = "Spend"
     if cfg.get("sales_col") in df.columns:

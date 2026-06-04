@@ -80,6 +80,7 @@ def build_master_lookups():
         rec = {
             "brand": brand,
             "model": _norm(r.get("Model")),
+            "sku":   _norm(r.get("FBA SKU")),
             "cat0":  _norm(r.get("category_l0")),
             "cat1":  _norm(r.get("category_l1")),
             "cat2":  _norm(r.get("category_l2")),
@@ -349,11 +350,20 @@ def attribute_sb_l0_l4(
             continue
         n = len(asins)
         for asin in asins:
+            # Pull canonical SKU + Model + categories from master via ASIN.
+            # Master is the source of truth — operator rule from weekly:
+            # raw ASIN → master gives SKU + Model + Brand + Categories.
+            meta = asin_to_meta.get(asin, {})
             out.append({
                 "campaignId":       r["campaignId"],
                 "campaignName":     r["campaignName"],
                 "brand":            brand,
                 "asin":             asin,
+                "sku":              meta.get("sku", ""),
+                "model":            meta.get("model", ""),
+                "category_l0":      meta.get("cat0", ""),
+                "category_l1":      meta.get("cat1", ""),
+                "category_l2":      meta.get("cat2", ""),
                 "spend":            round(float(r["cost"])         / n, 4),
                 "impressions":      int(round(float(r["impressions"]) / n)),
                 "clicks":           int(round(float(r["clicks"])      / n)),
@@ -363,3 +373,34 @@ def attribute_sb_l0_l4(
                 "method":           layer,
             })
     return out
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Reusable enrichment helper — for SP / SD outputs (NOT just SB)
+# ──────────────────────────────────────────────────────────────────────
+def enrich_with_master(df: pd.DataFrame, asin_col: str) -> pd.DataFrame:
+    """Override SKU / Model / Brand / category_l0/l1/l2 with master's
+    canonical values via ASIN lookup.  Mirrors the weekly's
+    step4_join_business_ads master-by-ASIN re-tag.
+
+    Rows whose ASIN isn't in master are left untouched.  Empty ASIN
+    rows are also left untouched.
+    """
+    if asin_col not in df.columns or df.empty:
+        return df
+    asin_to_meta, *_ = build_master_lookups()
+    if not asin_to_meta:
+        return df
+
+    a = df[asin_col].astype(str).str.strip()
+    mask = a.isin(asin_to_meta)
+    if not mask.any():
+        return df
+
+    df.loc[mask, "sku"]         = a[mask].map(lambda k: asin_to_meta[k]["sku"])
+    df.loc[mask, "model"]       = a[mask].map(lambda k: asin_to_meta[k]["model"])
+    df.loc[mask, "brand"]       = a[mask].map(lambda k: asin_to_meta[k]["brand"])
+    df.loc[mask, "category_l0"] = a[mask].map(lambda k: asin_to_meta[k]["cat0"])
+    df.loc[mask, "category_l1"] = a[mask].map(lambda k: asin_to_meta[k]["cat1"])
+    df.loc[mask, "category_l2"] = a[mask].map(lambda k: asin_to_meta[k]["cat2"])
+    return df

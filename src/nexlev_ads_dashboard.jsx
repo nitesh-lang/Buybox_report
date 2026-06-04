@@ -3,7 +3,7 @@ import RAW_DATA from "./raw_data.json";
 import BSR_RAW from "./bsr_data.json";
 import BSR_SNAPSHOTS from "./bsr_snapshots.json";
 
-const MONTH_SEQUENCE = ["Jan", "Feb", "Mar", "Apr"];
+const MONTH_SEQUENCE = ["Jan", "Feb", "Mar", "Apr", "May"];
 const MONTH_INDEX = MONTH_SEQUENCE.reduce((acc, month, index) => {
   acc[month] = index;
   return acc;
@@ -4017,7 +4017,7 @@ export default function Dashboard({ onLogout }) {
             />
           </div>
           <MultiSelectFilter label="Brand" selected={brand} setSelected={(v)=>{setBrand(v);setTablePage(1);}} opts={brands.map(b=>({v:b,l:b}))} isActive={brand.length>0} />
-          <MultiSelectFilter label="Month" selected={month} setSelected={(v)=>{setMonth(v);setTablePage(1);}} opts={[{v:"Jan",l:"Jan"},{v:"Feb",l:"Feb"},{v:"Mar",l:"Mar"},{v:"Apr",l:"Apr"}]} isActive={month.length>0} />
+          <MultiSelectFilter label="Month" selected={month} setSelected={(v)=>{setMonth(v);setTablePage(1);}} opts={[{v:"Jan",l:"Jan"},{v:"Feb",l:"Feb"},{v:"Mar",l:"Mar"},{v:"Apr",l:"Apr"},{v:"May",l:"May"}]} isActive={month.length>0} />
           <MultiSelectFilter label="Category" selected={cat} setSelected={(v)=>{setCat(v);setTablePage(1);}} opts={cats.map(c=>({v:c,l:c}))} isActive={cat.length>0} />
           {/* Data Mode Toggle */}
           <div style={{ display:"flex", gap:0, borderRadius:8, border:`1px solid ${THEME.border}`, overflow:"hidden", flexShrink:0 }}>
@@ -5369,7 +5369,7 @@ export default function Dashboard({ onLogout }) {
           />
         </div>
         <MultiSelectFilter label="Brand" selected={brand} setSelected={(v)=>{setBrand(v);setCompareAsin("");setTablePage(1);}} opts={brands.map(b=>({v:b,l:b}))} isActive={brand.length>0} />
-        <MultiSelectFilter label="Month" selected={month} setSelected={(v)=>{setMonth(v);setTablePage(1);}} opts={[{v:"Jan",l:"Jan"},{v:"Feb",l:"Feb"},{v:"Mar",l:"Mar"},{v:"Apr",l:"Apr"}]} isActive={month.length>0} />
+        <MultiSelectFilter label="Month" selected={month} setSelected={(v)=>{setMonth(v);setTablePage(1);}} opts={[{v:"Jan",l:"Jan"},{v:"Feb",l:"Feb"},{v:"Mar",l:"Mar"},{v:"Apr",l:"Apr"},{v:"May",l:"May"}]} isActive={month.length>0} />
         <MultiSelectFilter label="Category" selected={cat} setSelected={(v)=>{setCat(v);setCompareAsin("");setTablePage(1);}} opts={cats.map(c=>({v:c,l:c}))} isActive={cat.length>0} />
         {/* Data Mode Toggle */}
         <div style={{ display:"flex", gap:0, borderRadius:8, border:`1px solid ${THEME.border}`, overflow:"hidden", flexShrink:0 }}>

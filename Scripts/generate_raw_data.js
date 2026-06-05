@@ -117,7 +117,13 @@ function firstExisting(paths) {
 }
 
 function loadSkuMaster() {
-  const rows = readXlsx(path.join(DATA, "sku_master.xlsx"));
+  // Single source of truth = data/master/sku_master.xlsx (the same file
+  // monthly_buybox_pull.py / sb_attribution.py read).  Falls back to
+  // the legacy data/sku_master.xlsx if the canonical one isn't there.
+  const canonical = path.join(DATA, "master", "sku_master.xlsx");
+  const legacy    = path.join(DATA, "sku_master.xlsx");
+  const masterPath = fs.existsSync(canonical) ? canonical : legacy;
+  const rows = readXlsx(masterPath);
   const headers = Object.keys(rows[0] || {});
   const asinCol = col(headers, "child asin", "asin");
   const fbaCol = col(headers, "fba sku", "fba_sku");

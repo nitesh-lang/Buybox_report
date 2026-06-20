@@ -228,6 +228,7 @@ const COLS = [
   { key:"BuyboxPct",       label:"Buybox%",        fmt:"pct",  w:78  },
   { key:"NetUnits",        label:"Net Units",      fmt:"num",  w:72  },
   { key:"TotalNetSalesValue",label:"Net Sales",    fmt:"inr",  w:100 },
+  { key:"salesContribPct", label:"Sales %",        fmt:"pct2", w:80  },
   { key:"dp",              label:"DP ₹",           fmt:"inr2", w:80,  master:true },
   { key:"Impressions",     label:"Impressions",    fmt:"num",  w:92  },
   { key:"Clicks",          label:"Clicks",         fmt:"num",  w:62  },
@@ -334,6 +335,7 @@ function fmtCell(row, col) {
     case "inr":   return "₹" + v.toLocaleString("en-IN", { maximumFractionDigits: 0 });
     case "inr2":  return "₹" + v.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     case "pct":   return (v * 100).toFixed(1) + "%";
+    case "pct2":  return (v * 100).toFixed(2) + "%";
     case "title": return typeof v === "string" && v.length > 45 ? v.slice(0, 45) + "…" : (v || "—");
     default: return v;
   }
@@ -3419,6 +3421,25 @@ export default function Dashboard({ onLogout }) {
     });
   }, [dataMode]);
 
+  // Monthly sales contribution % — each ASIN's combined (1P+3P) sales as a share
+  // of the total combined sales for the same Brand + Month within the given set.
+  // Denominator is computed AFTER applyDataMode so the % matches the visible
+  // Net Sales column (all / 3P-only / 1P-only).
+  const withSalesContrib = React.useCallback((rows) => {
+    const totalsByGroup = new Map();
+    for (const r of rows) {
+      const g = `${r.Brand}||${r.Month}`;
+      totalsByGroup.set(g, (totalsByGroup.get(g) || 0) + (r.TotalNetSalesValue || 0));
+    }
+    return rows.map((r) => {
+      const g = `${r.Brand}||${r.Month}`;
+      const denom = totalsByGroup.get(g) || 0;
+      return Object.assign(Object.create(null), r, {
+        salesContribPct: denom > 0 ? (r.TotalNetSalesValue || 0) / denom : null,
+      });
+    });
+  }, []);
+
   const sorted = useMemo(() => {
     const col = COLS.find(c => c.key === sortKey);
     const isMaster = col?.master;
@@ -3432,7 +3453,7 @@ export default function Dashboard({ onLogout }) {
   const visibleRows = sorted;
   const totalPages = Math.max(1, Math.ceil(visibleRows.length / TABLE_PAGE_SIZE));
   const currentPage = Math.min(tablePage, totalPages);
-  const pagedRows = visibleRows.slice((currentPage - 1) * TABLE_PAGE_SIZE, currentPage * TABLE_PAGE_SIZE).map(applyDataMode);
+  const pagedRows = withSalesContrib(visibleRows.map(applyDataMode)).slice((currentPage - 1) * TABLE_PAGE_SIZE, currentPage * TABLE_PAGE_SIZE);
   const rankingMetricKey = useMemo(() => {
     const currentCol = COLS.find((column) => column.key === sortKey);
     return currentCol && currentCol.fmt !== "str" && currentCol.fmt !== "title" ? sortKey : "TotalNetSalesValue";
@@ -3489,12 +3510,13 @@ export default function Dashboard({ onLogout }) {
   const smartViewSortedRows = useMemo(() => {
     const col = COLS.find((column) => column.key === sortKey);
     const isMaster = col?.master;
-    return [...smartViewRows].sort((a, b) => {
+    const stamped = withSalesContrib([...smartViewRows].map(applyDataMode));
+    return stamped.sort((a, b) => {
       const av = isMaster ? getMasterValue(a, sortKey) : (a[sortKey] ?? null);
       const bv = isMaster ? getMasterValue(b, sortKey) : (b[sortKey] ?? null);
       return compareValues(av, bv, sortDir);
-    }).map(applyDataMode);
-  }, [smartViewRows, sortKey, sortDir, dataMode]);
+    });
+  }, [smartViewRows, sortKey, sortDir, dataMode, withSalesContrib]);
   const smartViewTotals = useMemo(() => smartViewRows.reduce((acc, row) => ({
     rows: acc.rows + 1,
     sales: acc.sales + (row.TotalNetSalesValue ?? 0),

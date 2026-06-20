@@ -3421,24 +3421,28 @@ export default function Dashboard({ onLogout }) {
     });
   }, [dataMode]);
 
-  // Monthly sales contribution % — each ASIN's combined (1P+3P) sales as a share
-  // of the total combined sales for the same Brand + Month within the given set.
-  // Denominator is computed AFTER applyDataMode so the % matches the visible
-  // Net Sales column (all / 3P-only / 1P-only).
-  const withSalesContrib = React.useCallback((rows) => {
-    const totalsByGroup = new Map();
-    for (const r of rows) {
+  // Monthly sales contribution % — Option B: each ASIN's combined (1P+3P) sales
+  // as a share of the FULL Brand + Month total, computed across the entire
+  // dataset (NOT the filtered/visible rows). This keeps each row's % stable
+  // regardless of search box, category, or smart-view filters.
+  // Denominator respects the active data mode so it matches the visible Net Sales.
+  const contribBrandMonthTotals = useMemo(() => {
+    const totals = new Map();
+    for (const r of enriched.map(applyDataMode)) {
       const g = `${r.Brand}||${r.Month}`;
-      totalsByGroup.set(g, (totalsByGroup.get(g) || 0) + (r.TotalNetSalesValue || 0));
+      totals.set(g, (totals.get(g) || 0) + (r.TotalNetSalesValue || 0));
     }
+    return totals;
+  }, [enriched, applyDataMode]);
+
+  const withSalesContrib = React.useCallback((rows) => {
     return rows.map((r) => {
-      const g = `${r.Brand}||${r.Month}`;
-      const denom = totalsByGroup.get(g) || 0;
+      const denom = contribBrandMonthTotals.get(`${r.Brand}||${r.Month}`) || 0;
       return Object.assign(Object.create(null), r, {
         salesContribPct: denom > 0 ? (r.TotalNetSalesValue || 0) / denom : null,
       });
     });
-  }, []);
+  }, [contribBrandMonthTotals]);
 
   const sorted = useMemo(() => {
     const col = COLS.find(c => c.key === sortKey);

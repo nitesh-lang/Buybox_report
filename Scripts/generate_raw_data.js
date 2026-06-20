@@ -26,7 +26,7 @@ const BRAND_FOLDERS = {
 // (the GitHub Actions monthly cron).
 const API_BRAND_FOLDERS = {
   Nexlev: "Nexlev",
-  "Audio Array": "Audio Array",
+  "Audio Array": "Audio array",
   Tonor: "Tonor",
   "White Mulberry": "White Mulberry",
 };

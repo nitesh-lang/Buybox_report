@@ -77,11 +77,25 @@ def idx(arr, i):
         return None
 
 def first_image(p):
+    # Keepa returns images in one of two shapes depending on the request:
+    #   1. imagesCSV: "abc.jpg,def.jpg"  (comma-separated string)
+    #   2. images:    [{"l": "abc.jpg", ...}, ...]  (list of objects)
+    # Check both so the image is never lost.
+    base = "https://m.media-amazon.com/images/I/"
     imgs = p.get("imagesCSV") or ""
     if imgs:
         f = imgs.split(",")[0].strip()
         if f:
-            return f"https://m.media-amazon.com/images/I/{f}"
+            return base + f
+    arr = p.get("images") or []
+    if arr:
+        first = arr[0]
+        if isinstance(first, dict):
+            fname = first.get("l") or first.get("m") or first.get("s") or ""
+            if fname:
+                return base + fname
+        elif isinstance(first, str) and first.strip():
+            return base + first.strip()
     return ""
 
 def cell(v):
@@ -90,11 +104,39 @@ def cell(v):
 CHUNK_SIZE  = 100   # ASINs per API call; a network drop loses at most this many
 MAX_RETRIES = 5     # retries per chunk on a network/connection error
 
+def _last_hist(p, key):
+    """Last non-empty value from a product['data'] history array, or None.
+    keepa stores RATING as 0-50 ints with -1 for gaps; CSV history arrays
+    end with the most recent value."""
+    data = p.get("data") or {}
+    arr = data.get(key)
+    if arr is None:
+        return None
+    try:
+        for v in reversed(list(arr)):
+            if v is not None and v == v and v != -1:  # v==v rejects NaN
+                return float(v)
+    except TypeError:
+        return None
+    return None
+
 def row_for(p, brand):
     s   = p.get("stats") or {}
     cur = s.get("current") or []
+
+    # Rating: prefer stats.current[16]; fall back to RATING history; /10 -> stars.
     rating_raw = idx(cur, RATING)
+    if rating_raw is None:
+        rating_raw = _last_hist(p, "RATING")
     rating = round(rating_raw / 10, 1) if rating_raw is not None else None
+
+    # Review count: prefer stats.current[17]; fall back to COUNT_REVIEWS history.
+    reviews = idx(cur, COUNT_REVIEWS)
+    if reviews is None:
+        reviews = _last_hist(p, "COUNT_REVIEWS")
+    if reviews is not None:
+        reviews = int(reviews)
+
     ms = p.get("monthlySold")
     if ms in (None, -1):
         ms = ""
@@ -107,7 +149,7 @@ def row_for(p, brand):
         cell(idx(s.get("avg365") or [], SALES)),
         cell(s.get("salesRankDrops30")),
         cell(rating),
-        cell(idx(cur, COUNT_REVIEWS)),
+        cell(reviews),
         p.get("asin", ""),
         brand,
         ms,
@@ -119,7 +161,8 @@ def query_with_retry(api, chunk):
     import time
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            return api.query(chunk, domain=DOMAIN, stats=1, history=False, wait=True)
+            return api.query(chunk, domain=DOMAIN, stats=1, rating=True,
+                             history=False, wait=True)
         except Exception as e:
             transient = any(t in str(e).lower() for t in
                             ("getaddrinfo", "connection", "timed out", "timeout",
